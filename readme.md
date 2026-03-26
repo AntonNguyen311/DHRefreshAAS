@@ -30,7 +30,7 @@ dotnet build
 dotnet test
 ```
 
-GitHub Actions runs the same solution on push/PR to `main` or `master` (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)). CI does not require repository secrets. For optional deploy-related secrets later, see [`docs/github-actions-secrets.md`](docs/github-actions-secrets.md).
+GitHub Actions runs the same solution on push/PR to `main` or `master` (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)). On push to `master`, code is also deployed to the Azure Function App via OIDC (see [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)). CI does not require repository secrets. For GitHub Actions variables and optional deploy secrets, see [`docs/github-actions-secrets.md`](docs/github-actions-secrets.md).
 
 To run the Functions host locally (verify HTTP routes and runtime resolution), install [Azure Functions Core Tools](https://learn.microsoft.com/azure/azure-functions/functions-run-local) and run `func start` from the project folder. This environment may not have `func` on PATH; install or use `npx azure-functions-core-tools` if needed.
 

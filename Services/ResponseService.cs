@@ -43,12 +43,16 @@ public class ResponseService
         string operationId, 
         int estimatedDurationMinutes)
     {
+        var baseUrl = $"{request.Url.Scheme}://{request.Url.Host}{(request.Url.IsDefaultPort ? "" : $":{request.Url.Port}")}";
+        var statusUrl = $"{baseUrl}/api/DHRefreshAAS_Status?operationId={operationId}";
+
         var responseData = new
         {
             operationId = operationId,
             status = "accepted",
             message = "Refresh operation started in background. Use status endpoint to monitor progress.",
-            estimatedDurationMinutes = estimatedDurationMinutes
+            estimatedDurationMinutes = estimatedDurationMinutes,
+            statusUrl = statusUrl
         };
 
         return await CreateSuccessResponseAsync(request, responseData, HttpStatusCode.Accepted);

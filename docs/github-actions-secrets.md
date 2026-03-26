@@ -1,38 +1,43 @@
-# GitHub Actions — secrets (chuẩn bị)
+# GitHub Actions — Secrets & Variables
 
-Workflow [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) chỉ **build + test** trên `ubuntu-latest` và **không cần** repository secret nào để chạy CI cơ bản.
+Workflow [`ci.yml`](../.github/workflows/ci.yml) chỉ **build + test**, không cần bất kỳ secret nào.
 
-## PAT khi push từ máy (quan trọng)
+Workflow [`deploy.yml`](../.github/workflows/deploy.yml) deploy lên Azure Function App `vn-fa-sa-sdp-p-aas` bằng **OIDC (User-assigned managed identity)** — không cần store password hay publish profile.
 
-Để **đẩy file** `.github/workflows/*.yml` lên GitHub, Personal Access Token phải có scope **`workflow`** (cùng với `repo`). Nếu không, Git báo: *refusing to allow a Personal Access Token to create or update workflow without `workflow` scope*.
+---
 
-Cách sửa: GitHub → Settings → Developer settings → Fine-grained hoặc classic token → bật **Workflow** (hoặc dùng `gh auth refresh -h github.com -s workflow` nếu dùng GitHub CLI).
+## Variables cho deploy (không phải secret)
 
-## CI hiện tại (build/test)
+Tạo tại: **Settings → Secrets and variables → Actions → Variables**
 
-| Secret | Cần không? | Ghi chú |
-|--------|------------|---------|
-| (không) | Không | `dotnet restore` / `build` / `test` dùng NuGet public |
+| Variable | Lấy từ đâu |
+|----------|------------|
+| `AZURE_CLIENT_ID` | Azure Portal → Managed Identities → chọn identity → Properties → **Client ID** |
+| `AZURE_TENANT_ID` | Azure Portal → Microsoft Entra ID → Overview → **Tenant ID** |
+| `AZURE_SUBSCRIPTION_ID` | Azure Portal → Subscriptions → **Subscription ID** |
 
-## Khi bạn thêm bước deploy lên Azure (tùy chọn sau)
+> **Lưu ý**: Nếu dùng Azure Deployment Center → Save, ba giá trị này sẽ được tạo tự động.
 
-Tạo **Service Principal** hoặc dùng **Publish Profile**, rồi thêm vào repo: **Settings → Secrets and variables → Actions**.
+---
 
-| Secret | Mục đích |
-|--------|----------|
-| `AZURE_CREDENTIALS` | JSON từ `az ad sp create-for-rbac` (dùng với `azure/login`) |
-| `AZURE_FUNCTIONAPP_PUBLISH_PROFILE` | Nội dung file `.PublishSettings` (deploy bằng MSBuild/zip) |
-| `AZURE_SUBSCRIPTION_ID` | Subscription ID (một số template deploy) |
-| `AZURE_RESOURCE_GROUP` | Tên resource group |
+## PAT khi push workflow file từ máy
 
-**Không** đưa `local.settings.json`, storage keys, hay AAD client secret vào workflow dạng plain text — dùng **Application Settings** trên Function App hoặc **Key Vault references** trong Azure.
+Để push `.github/workflows/*.yml` lên GitHub, PAT cần scope **`repo` + `workflow`**.
 
-## Cách thêm secret trên GitHub
+```
+gh auth refresh -h github.com -s workflow
+git push origin master
+```
 
-1. Repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
-2. Name: ví dụ `AZURE_CREDENTIALS`
-3. Value: dán nội dung (một dòng JSON hoặc XML publish profile tùy công cụ)
+Hoặc tạo PAT mới tại: GitHub → Settings → Developer settings → Personal access tokens → bật **workflow**.
 
-## Biến môi trường (không nhạy cảm)
+---
 
-Dùng **Settings → Secrets and variables → Actions → Variables** cho giá trị không bí mật (tên app, region) nếu workflow cần.
+## Không commit
+
+| File | Lý do |
+|------|-------|
+| `local.settings.json` | Chứa AAS credentials và storage key — đã có trong `.gitignore` |
+| `*.pubxml.user` | Chứa deployment credentials cá nhân |
+
+Dùng **Application Settings** trên Function App hoặc **Key Vault references** để lưu secrets trong môi trường Azure.
