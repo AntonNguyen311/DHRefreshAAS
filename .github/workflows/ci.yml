@@ -1,4 +1,4 @@
-name: CI
+name: CI – Build and Test
 
 on:
   push:
@@ -10,8 +10,7 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
