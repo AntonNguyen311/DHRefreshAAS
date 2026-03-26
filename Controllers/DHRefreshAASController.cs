@@ -26,6 +26,7 @@ public class DHRefreshAASController
     private readonly ErrorHandlingService _errorHandling;
     private readonly RequestProcessingService _requestProcessing;
     private readonly ResponseService _responseService;
+    private readonly OperationCleanupService _cleanupService;
     private readonly IHostApplicationLifetime _hostApplicationLifetime;
     private readonly ILogger<DHRefreshAASController> _logger;
 
@@ -38,6 +39,7 @@ public class DHRefreshAASController
         ErrorHandlingService errorHandling,
         RequestProcessingService requestProcessing,
         ResponseService responseService,
+        OperationCleanupService cleanupService,
         IHostApplicationLifetime hostApplicationLifetime,
         ILogger<DHRefreshAASController> logger)
     {
@@ -49,6 +51,7 @@ public class DHRefreshAASController
         _errorHandling = errorHandling;
         _requestProcessing = requestProcessing;
         _responseService = responseService;
+        _cleanupService = cleanupService;
         _hostApplicationLifetime = hostApplicationLifetime;
         _logger = logger;
     }
@@ -192,6 +195,7 @@ public class DHRefreshAASController
         await _operationStorage.UpsertOperationAsync(operationStatus);
         
         // Start background task with progress tracking
+        _cleanupService.TrackOperation(operationId);
         _ = Task.Run(async () =>
         {
             try
@@ -278,8 +282,12 @@ public class DHRefreshAASController
                     _progressTracking.UpdateProgress(op); // Final progress update
                     await _operationStorage.UpsertOperationAsync(op);
                 }
-                
+
                 logger.LogError(ex, "Background refresh operation {OperationId} failed: {ErrorMessage}", operationId, ex.Message);
+            }
+            finally
+            {
+                _cleanupService.UntrackOperation(operationId);
             }
         });
         

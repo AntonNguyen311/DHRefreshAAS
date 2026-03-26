@@ -16,6 +16,8 @@ var host = new HostBuilder()
         services.AddSingleton<AasRefreshService>();
         services.AddSingleton<AasScalingService>();
         services.AddSingleton<OperationStorageService>();
+        services.AddSingleton<OperationCleanupService>();
+        services.AddHostedService(sp => sp.GetRequiredService<OperationCleanupService>());
         services.AddSingleton<ProgressTrackingService>();
         services.AddSingleton<ErrorHandlingService>();
         services.AddSingleton<RequestProcessingService>();

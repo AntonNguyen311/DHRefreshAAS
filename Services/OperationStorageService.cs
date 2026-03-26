@@ -211,6 +211,54 @@ public class OperationStorageService
     }
     
     /// <summary>
+    /// Get all operations with "running" status
+    /// </summary>
+    public virtual async Task<List<OperationStatus>> GetRunningOperationsAsync()
+    {
+        try
+        {
+            await EnsureTableInitializedAsync();
+            var operations = new List<OperationStatus>();
+
+            await foreach (var entity in _tableClient.QueryAsync<OperationEntity>(
+                filter: $"PartitionKey eq 'operations' and Status eq 'running'"))
+            {
+                operations.Add(entity.ToOperationStatus());
+            }
+
+            return operations;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to retrieve running operations: {ErrorMessage}", ex.Message);
+            return new List<OperationStatus>();
+        }
+    }
+
+    /// <summary>
+    /// Mark an operation as failed with a given error message
+    /// </summary>
+    public virtual async Task<bool> MarkOperationAsFailedAsync(string operationId, string errorMessage)
+    {
+        try
+        {
+            var operation = await GetOperationAsync(operationId);
+            if (operation == null) return false;
+
+            operation.Status = "failed";
+            operation.EndTime = DateTime.UtcNow;
+            operation.ErrorMessage = errorMessage;
+            operation.CurrentPhase = "Failed";
+            return await UpsertOperationAsync(operation);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to mark operation {OperationId} as failed: {ErrorMessage}", operationId, ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Get operation counts by status
     /// </summary>
     public virtual async Task<(int running, int completed, int failed, int total)> GetOperationCountsAsync()

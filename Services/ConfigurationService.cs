@@ -75,6 +75,7 @@ public class ConfigurationService
     public virtual string AasServerName => GetConfigValue("AAS_SERVER_NAME", "vnaassasdpp01");
     public virtual string AasSubscriptionId => GetConfigValue("AAS_SUBSCRIPTION_ID", "8730775e-045c-47d1-a080-e3b9882cec01");
     public virtual int HeartbeatIntervalSeconds => GetConfigValue("HEARTBEAT_INTERVAL_SECONDS", 30);
+    public virtual int ZombieTimeoutMinutes => GetConfigValue("ZOMBIE_TIMEOUT_MINUTES", 30);
     public virtual bool EnableDetailedLogging => GetConfigValue("ENABLE_DETAILED_LOGGING", true);
 
     // AAS Connection settings
