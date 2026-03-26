@@ -1,0 +1,247 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_a_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "method": "POST"
+                }
+            }
+        },
+        "actions": {
+            "Initialize_QueryJsonResult_variable": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "QueryJsonResult",
+                            "type": "string",
+                            "value": "@string(triggerBody())"
+                        }
+                    ]
+                }
+            },
+            "MasterEtlLineageKey": {
+                "runAfter": {
+                    "Initialize_QueryJsonResult_variable": [
+                        "Succeeded"
+                    ]
+                },
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "MasterEtlLineageKey",
+                            "type": "integer",
+                            "value": "@int(json(variables('QueryJsonResult')).MasterEtlLineageKey)"
+                        }
+                    ]
+                }
+            },
+            "Get_List_CubeName": {
+                "runAfter": {
+                    "MasterEtlLineageKey": [
+                        "Succeeded"
+                    ]
+                },
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['sql-1']['connectionId']"
+                        }
+                    },
+                    "method": "post",
+                    "body": {
+                        "query": "SELECT c.CubeModelName\nFROM [ETL].[DataWarehouseAndCubeMapping] f\nJOIN [ETL].[CountryModelCube] c on f.CountryKey = c.CountryKey\nWHERE f.CountryKey IN (SELECT TOP 1 [MasterSettings_CountryKey] FROM [ETL].[vw_EtlLog] WHERE LineageKey = @{variables('MasterEtlLineageKey')}  AND [MasterSettings_CountryKey] IS NOT NULL)\nGROUP BY c.CubeModelName"
+                    },
+                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                }
+            },
+            "For_each": {
+                "foreach": "@body('Get_List_CubeName')?['resultsets']?['Table1']",
+                "actions": {
+                    "Get_AAS_Model_Tables_JSON_Format": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": {
+                                "connection": {
+                                    "name": "@parameters('$connections')['sql-1']['connectionId']"
+                                }
+                            },
+                            "method": "post",
+                            "body": {
+                                "query": "DECLARE @CountryKey INT = (SELECT TOP 1 MasterSettings_CountryKey FROM etl.vw_EtlLog etllog WHERE etllog.LineageKey = @{variables('MasterEtlLineageKey')} AND MasterSettings_CountryKey IS NOT NULL) \nSELECT cube.CubeName as database_name, \n        refresh_objects = JSON_QUERY(CONCAT('[', STRING_AGG(CONCAT('{\"table\":\"', STRING_ESCAPE(cube.CubeTableName, 'json'), '\"', ',', '\"partition\":\"', STRING_ESCAPE(cube.Partition, 'json'), '\"}'), ','), ']'))\nFROM\n(\n    SELECT Distinct SchemaName, TableName, @CountryKey AS CountryKey \n    FROM etl.vw_EtlLog etllog\n    WHERE etllog.LineageKey = @{variables('MasterEtlLineageKey')} \n        AND etllog.StageName = 'LOAD' \n        AND etllog.ActivityStatus = 'Succeeded' \n        AND coalesce(etllog.ActivityOutput_LoadInsertedRows, 0) \n            + coalesce(etllog.ActivityOutput_LoadUpdatedRows, 0) \n            + coalesce(etllog.ActivityOutput_LoadDeletedRows, 0) > 0\n    UNION\n    SELECT 'ETL' SchemaName, 'vw_EtlLog' TableName, @CountryKey AS CountryKey\n) etlLog\n    INNER JOIN etl.datawarehouseandcubemapping cube ON etllog.SchemaName=cube.SchemaName \n                                                    AND etllog.TableName=cube.TableName\n                                                    AND cube.CubeName = '@{items('For_each')?['CubeModelName']}'\nGROUP BY CubeName\nFOR JSON PATH, WITHOUT_ARRAY_WRAPPER"
+                            },
+                            "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                        }
+                    },
+                    "Condition": {
+                        "actions": {},
+                        "runAfter": {
+                            "Get_AAS_Model_Tables_JSON_Format": [
+                                "Succeeded"
+                            ]
+                        },
+                        "else": {
+                            "actions": {
+                                "Set_QueryJsonResult_variable": {
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "QueryJsonResult",
+                                        "value": "@string(body('Get_AAS_Model_Tables_JSON_Format')?['ResultSets']['Table1'][0]['JSON_F52E2B61_x002d_18A1_x002d_11d1_x002d_B105_x002d_00805F49916B'])"
+                                    }
+                                },
+                                "DHRefreshAAS_HttpStart": {
+                                    "runAfter": {
+                                        "Set_QueryJsonResult_variable": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "type": "Function",
+                                    "inputs": {
+                                        "body": "@variables('QueryJsonResult')",
+                                        "method": "POST",
+                                        "headers": {
+                                            "Content-Type": "application/json"
+                                        },
+                                        "function": {
+                                            "id": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/resourceGroups/vn-rg-sa-sdp-solution-p/providers/Microsoft.Web/sites/vn-fa-sa-sdp-p-aas/functions/DHRefreshAAS_HttpStart"
+                                        }
+                                    }
+                                },
+                                "Condition_1": {
+                                    "actions": {
+                                        "Send_an_email_(V2)": {
+                                            "type": "ApiConnection",
+                                            "inputs": {
+                                                "host": {
+                                                    "connection": {
+                                                        "name": "@parameters('$connections')['office365']['connectionId']"
+                                                    }
+                                                },
+                                                "method": "post",
+                                                "body": {
+                                                    "To": "mina.my@deheus.com",
+                                                    "Subject": "Refesh Cube Fail",
+                                                    "Body": "<p class=\"editor-paragraph\">Dear Team,<br><br>Lỗi khi đang refresh Cube model : ( Cloud UAT )<br>@{body('DHRefreshAAS_HttpStart')?['input']?['database_name']}<br>Quy trình RefreshCube đã gặp lỗi.<br>@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['output']}<br>- CreatedTime: @{body('DHRefreshAAS_HttpStart')?['createdTime']}<br>- LastUpdatedTime: @{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['lastUpdatedTime']}.<br>- Instance ID @{body('DHRefreshAAS_HttpStart')?['instanceId']}.<br>- Final Status: <br>- Nguyên nhân lỗi: @{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['output']}.<br>- Danh sách các đối tượng đã được gửi đi để refresh trong lần chạy này:<br>@{string(body('DHRefreshAAS_HttpStart')?['input']?['refresh_objects'])}<br><br><br>Many Thanks,<br>Mina My</p>",
+                                                    "Importance": "High"
+                                                },
+                                                "path": "/v2/Mail"
+                                            }
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Until_Operation_Complete": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "else": {
+                                        "actions": {}
+                                    },
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "equals": [
+                                                    "@body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status']",
+                                                    "failed"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "type": "If"
+                                },
+                                "Until_Operation_Complete": {
+                                    "actions": {
+                                        "vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status": {
+                                            "type": "Function",
+                                            "inputs": {
+                                                "method": "GET",
+                                                "queries": {
+                                                    "operationId": "@{body('DHRefreshAAS_HttpStart').operationId}"
+                                                },
+                                                "function": {
+                                                    "id": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/resourceGroups/vn-rg-sa-sdp-solution-p/providers/Microsoft.Web/sites/vn-fa-sa-sdp-p-aas/functions/DHRefreshAAS_Status"
+                                                }
+                                            }
+                                        },
+                                        "Delay": {
+                                            "type": "Wait",
+                                            "inputs": {
+                                                "interval": {
+                                                    "count": 30,
+                                                    "unit": "Second"
+                                                }
+                                            },
+                                            "runAfter": {
+                                                "vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "DHRefreshAAS_HttpStart": [
+                                            "Succeeded"
+                                        ]
+                                    },
+                                    "expression": "@or(equals(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status'], 'completed'), equals(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status'], 'failed'), equals(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['isCompleted'], true))",
+                                    "limit": {
+                                        "count": 60,
+                                        "timeout": "PT1H"
+                                    },
+                                    "type": "Until"
+                                }
+                            }
+                        },
+                        "expression": {
+                            "and": [
+                                {
+                                    "equals": [
+                                        "@empty(body('Get_AAS_Model_Tables_JSON_Format')?['ResultSets'])",
+                                        "@true"
+                                    ]
+                                }
+                            ]
+                        },
+                        "type": "If"
+                    }
+                },
+                "runAfter": {
+                    "Get_List_CubeName": [
+                        "Succeeded"
+                    ]
+                },
+                "type": "Foreach"
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": {
+                "type": "Object",
+                "defaultValue": {}
+            }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "sql-1": {
+                    "id": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/providers/Microsoft.Web/locations/southeastasia/managedApis/sql",
+                    "connectionId": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/resourceGroups/vn-rg-sa-sdp-solution-p/providers/Microsoft.Web/connections/sql-1",
+                    "connectionName": "sql-1"
+                },
+                "office365": {
+                    "id": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/providers/Microsoft.Web/locations/southeastasia/managedApis/office365",
+                    "connectionId": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/resourceGroups/vn-rg-sa-sdp-solution-p/providers/Microsoft.Web/connections/office365",
+                    "connectionName": "office365"
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,100 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
+
+namespace DHRefreshAAS;
+
+/// <summary>
+/// Configuration service for reading environment variables and settings
+/// </summary>
+public class ConfigurationService
+{
+    private readonly IConfiguration _configuration;
+    private readonly ILogger<ConfigurationService> _logger;
+
+    public ConfigurationService(IConfiguration configuration, ILogger<ConfigurationService> logger)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(logger);
+        _configuration = configuration;
+        _logger = logger;
+    }
+
+    public virtual int GetConfigValue(string key, int defaultValue)
+    {
+        var value = _configuration[key];
+        if (int.TryParse(value, out var result))
+        {
+            _logger.LogDebug("Configuration {Key} = {Value}", key, result);
+            return result;
+        }
+        
+        _logger.LogDebug("Configuration {Key} not found or invalid, using default {DefaultValue}", key, defaultValue);
+        return defaultValue;
+    }
+
+    public virtual string GetConfigValue(string key, string defaultValue)
+    {
+        var value = _configuration[key];
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            _logger.LogDebug("Configuration {Key} found", key);
+            return value;
+        }
+        
+        _logger.LogDebug("Configuration {Key} not found, using default", key);
+        return defaultValue;
+    }
+
+    public virtual bool GetConfigValue(string key, bool defaultValue)
+    {
+        var value = _configuration[key];
+        if (bool.TryParse(value, out var result))
+        {
+            _logger.LogDebug("Configuration {Key} = {Value}", key, result);
+            return result;
+        }
+        
+        _logger.LogDebug("Configuration {Key} not found or invalid, using default {DefaultValue}", key, defaultValue);
+        return defaultValue;
+    }
+
+    // Configuration constants with fallback values
+    public virtual int MaxRetryAttempts => GetConfigValue("MAX_RETRY_ATTEMPTS", 3);
+    public virtual int BaseDelaySeconds => GetConfigValue("BASE_DELAY_SECONDS", 30);
+    public virtual int ConnectionTimeoutMinutes => GetConfigValue("CONNECTION_TIMEOUT_MINUTES", 10);
+    public virtual int OperationTimeoutMinutes => GetConfigValue("OPERATION_TIMEOUT_MINUTES", 60);
+    public virtual int SaveChangesTimeoutMinutes => GetConfigValue("SAVE_CHANGES_TIMEOUT_MINUTES", 15);
+    public virtual int HeartbeatIntervalSeconds => GetConfigValue("HEARTBEAT_INTERVAL_SECONDS", 30);
+    public virtual bool EnableDetailedLogging => GetConfigValue("ENABLE_DETAILED_LOGGING", true);
+
+    // AAS Connection settings
+    public virtual string AasServerUrl => GetConfigValue("AAS_SERVER_URL", "asazure://southeastasia.asazure.windows.net/deheusaas");
+    public virtual string AasDatabase => GetConfigValue("AAS_DATABASE", "DAModel");
+    public virtual string AasAuthMode => GetConfigValue("AAS_AUTH_MODE", "ManagedIdentity"); // ManagedIdentity, ServicePrincipal, or UserPassword
+    public virtual string AasUserId => GetConfigValue("AAS_USER_ID", ""); // For ServicePrincipal: client id; For UserPassword: UPN
+    public virtual string AasPassword => GetConfigValue("AAS_PASSWORD", ""); // For ServicePrincipal: client secret; For UserPassword: password
+    public virtual string AasTenantId => GetConfigValue("AAS_TENANT_ID", "");
+
+    /// <summary>MSOLAP Connect Timeout (seconds); clamp 30–3600.</summary>
+    public virtual int GetConnectTimeoutSeconds(int connectionTimeoutMinutes)
+    {
+        var seconds = connectionTimeoutMinutes * 60;
+        return Math.Clamp(seconds, 30, 3600);
+    }
+
+    /// <summary>MSOLAP Command Timeout (seconds); derived from refresh budget, clamp 120–7200 (2h).</summary>
+    public virtual int GetCommandTimeoutSeconds(int operationTimeoutMinutes, int saveChangesTimeoutMinutes)
+    {
+        var budgetMinutes = Math.Max(operationTimeoutMinutes, saveChangesTimeoutMinutes);
+        var seconds = budgetMinutes * 60 + 120;
+        return Math.Clamp(seconds, 120, 7200);
+    }
+
+    /// <summary>Defaults for diagnostics (e.g. test connection) from host configuration.</summary>
+    public virtual (int ConnectTimeoutSeconds, int CommandTimeoutSeconds) GetDefaultClientTimeouts()
+    {
+        var connect = GetConnectTimeoutSeconds(ConnectionTimeoutMinutes);
+        var command = GetCommandTimeoutSeconds(OperationTimeoutMinutes, SaveChangesTimeoutMinutes);
+        return (connect, command);
+    }
+}

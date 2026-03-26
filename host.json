@@ -1,0 +1,57 @@
+{
+    "version": "2.0",
+    "functionTimeout": "02:00:00",
+    "logging": {
+        "applicationInsights": {
+            "samplingSettings": {
+                "isEnabled": true,
+                "excludedTypes": "Request"
+            },
+            "enableLiveMetricsFilters": true
+        },
+        "logLevel": {
+            "default": "Information",
+            "Host.Results": "Error",
+            "Function": "Error",
+            "Azure.Core": "Error",
+            "DHRefreshAAS": "Information"
+        }
+    },
+    "extensions": {
+        "http": {
+            "routePrefix": "api",
+            "maxOutstandingRequests": 200,
+            "maxConcurrentRequests": 100,
+            "dynamicThrottlesEnabled": true,
+            "customHeaders": {
+                "X-Content-Type-Options": "nosniff"
+            },
+            "cors": {
+                "allowedOrigins": [
+                    "https://portal.azure.com",
+                    "https://ms.portal.azure.com",
+                    "https://preview.portal.azure.com",
+                    "https://rc.portal.azure.com",
+                    "https://canary.portal.azure.com",
+                    "https://localhost:3000",
+                    "http://localhost:3000"
+                ],
+                "supportCredentials": false
+            }
+        }
+    },
+    "healthMonitor": {
+        "enabled": true,
+        "healthCheckInterval": "00:00:10",
+        "healthCheckWindow": "00:02:00",
+        "healthCheckThreshold": 6,
+        "counterThreshold": 0.80
+    },
+    "singleton": {
+        "lockPeriod": "00:00:15",
+        "listenerLockPeriod": "00:01:00",
+        "listenerLockRecoveryPollingInterval": "00:01:00",
+        "lockAcquisitionTimeout": "00:01:00",
+        "lockAcquisitionPollingInterval": "00:00:05"
+    }
+}
