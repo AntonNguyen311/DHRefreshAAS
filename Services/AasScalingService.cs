@@ -1,6 +1,7 @@
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
 using Azure.Identity;
-using Azure.ResourceManager;
-using Azure.ResourceManager.Resources;
 using Microsoft.Extensions.Logging;
 
 namespace DHRefreshAAS;
@@ -9,6 +10,7 @@ public class AasScalingService
 {
     private readonly ConfigurationService _config;
     private readonly ILogger<AasScalingService> _logger;
+    private static readonly HttpClient _httpClient = new();
 
     public AasScalingService(ConfigurationService config, ILogger<AasScalingService> logger)
     {
@@ -37,7 +39,6 @@ public class AasScalingService
         var originalSku = _config.AasOriginalSku;
         _logger.LogInformation("Scaling AAS back to {OriginalSku}...", originalSku);
 
-        // Retry scale-down 3 times - this is critical to avoid cost overrun
         for (int attempt = 1; attempt <= 3; attempt++)
         {
             try
@@ -67,22 +68,8 @@ public class AasScalingService
 
         try
         {
-            var armClient = CreateArmClient();
-            var resourceId = GetAasResourceId();
-
-            _logger.LogInformation("Updating AAS SKU to {TargetSku} (resource: {ResourceId})", targetSku, resourceId);
-
-            var genericResource = armClient.GetGenericResource(new Azure.Core.ResourceIdentifier(resourceId));
-            var resource = await genericResource.GetAsync(cancellationToken);
-
-            if (resource?.Value == null)
-            {
-                _logger.LogError("AAS resource not found: {ResourceId}", resourceId);
-                return false;
-            }
-
-            // Check current SKU
-            var currentSku = resource.Value.Data.Sku?.Name;
+            // Get current SKU first
+            var currentSku = await GetCurrentSkuAsync(cancellationToken);
             _logger.LogInformation("Current AAS SKU: {CurrentSku}, Target: {TargetSku}", currentSku, targetSku);
 
             if (string.Equals(currentSku, targetSku, StringComparison.OrdinalIgnoreCase))
@@ -91,17 +78,44 @@ public class AasScalingService
                 return true;
             }
 
-            // Update SKU
-            var data = resource.Value.Data;
-            data.Sku = new Azure.ResourceManager.Resources.Models.ResourcesSku { Name = targetSku, Tier = "Standard" };
+            // Scale using REST API (PATCH)
+            var token = await GetManagementTokenAsync(cancellationToken);
+            var url = GetAasResourceUrl();
+            var body = JsonSerializer.Serialize(new { sku = new { name = targetSku, tier = "Standard" } });
 
-            var updateOperation = await genericResource.UpdateAsync(Azure.WaitUntil.Completed, data, cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Patch, url);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.SendAsync(request, cancellationToken);
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("AAS scale failed. Status: {StatusCode}, Response: {Response}",
+                    response.StatusCode, responseBody);
+                return false;
+            }
+
+            _logger.LogInformation("AAS scale request accepted (Status: {StatusCode}). Waiting for completion...",
+                response.StatusCode);
+
+            // Poll until scaling completes (max 5 minutes)
+            var completed = await WaitForScalingCompleteAsync(targetSku, cancellationToken);
 
             var elapsed = (DateTime.UtcNow - startTime).TotalSeconds;
-            _logger.LogInformation("AAS scaled from {CurrentSku} to {TargetSku} in {ElapsedSeconds:F1}s",
-                currentSku, targetSku, elapsed);
+            if (completed)
+            {
+                _logger.LogInformation("AAS scaled from {CurrentSku} to {TargetSku} in {ElapsedSeconds:F1}s",
+                    currentSku, targetSku, elapsed);
+            }
+            else
+            {
+                _logger.LogWarning("AAS scale to {TargetSku} may not have completed after {ElapsedSeconds:F1}s",
+                    targetSku, elapsed);
+            }
 
-            return updateOperation.HasCompleted;
+            return completed;
         }
         catch (Exception ex)
         {
@@ -112,26 +126,86 @@ public class AasScalingService
         }
     }
 
-    private ArmClient CreateArmClient()
+    private async Task<string?> GetCurrentSkuAsync(CancellationToken cancellationToken)
     {
-        var tenantId = _config.AasTenantId;
-        var clientId = _config.AasUserId;
-        var clientSecret = _config.AasPassword;
+        var token = await GetManagementTokenAsync(cancellationToken);
+        var url = GetAasResourceUrl();
 
-        if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(clientId) || string.IsNullOrWhiteSpace(clientSecret))
-        {
-            throw new InvalidOperationException(
-                "AAS auto-scaling requires Service Principal credentials (AAS_TENANT_ID, AAS_USER_ID, AAS_PASSWORD)");
-        }
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
-        return new ArmClient(credential, _config.AasSubscriptionId);
+        var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode) return null;
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var doc = JsonDocument.Parse(body);
+        return doc.RootElement.GetProperty("sku").GetProperty("name").GetString();
     }
 
-    private string GetAasResourceId()
+    private async Task<bool> WaitForScalingCompleteAsync(string targetSku, CancellationToken cancellationToken)
     {
-        return $"/subscriptions/{_config.AasSubscriptionId}" +
+        // Poll every 10 seconds, max 5 minutes
+        for (int i = 0; i < 30; i++)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken);
+
+            try
+            {
+                var currentSku = await GetCurrentSkuAsync(cancellationToken);
+                var state = await GetServerStateAsync(cancellationToken);
+
+                _logger.LogInformation("AAS scaling poll: SKU={CurrentSku}, State={State}", currentSku, state);
+
+                if (string.Equals(currentSku, targetSku, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(state, "Succeeded", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Error polling AAS state during scaling");
+            }
+        }
+
+        return false;
+    }
+
+    private async Task<string?> GetServerStateAsync(CancellationToken cancellationToken)
+    {
+        var token = await GetManagementTokenAsync(cancellationToken);
+        var url = GetAasResourceUrl();
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode) return null;
+
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var doc = JsonDocument.Parse(body);
+        return doc.RootElement.GetProperty("properties").GetProperty("state").GetString();
+    }
+
+    private async Task<string> GetManagementTokenAsync(CancellationToken cancellationToken)
+    {
+        var credential = new ClientSecretCredential(
+            _config.AasTenantId,
+            _config.AasUserId,
+            _config.AasPassword);
+
+        var tokenResult = await credential.GetTokenAsync(
+            new Azure.Core.TokenRequestContext(new[] { "https://management.azure.com/.default" }),
+            cancellationToken);
+
+        return tokenResult.Token;
+    }
+
+    private string GetAasResourceUrl()
+    {
+        return $"https://management.azure.com/subscriptions/{_config.AasSubscriptionId}" +
                $"/resourceGroups/{_config.AasResourceGroup}" +
-               $"/providers/Microsoft.AnalysisServices/servers/{_config.AasServerName}";
+               $"/providers/Microsoft.AnalysisServices/servers/{_config.AasServerName}" +
+               "?api-version=2017-08-01";
     }
 }
