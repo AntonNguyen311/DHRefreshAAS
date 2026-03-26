@@ -76,6 +76,14 @@ public class ConfigurationService
     public virtual string AasSubscriptionId => GetConfigValue("AAS_SUBSCRIPTION_ID", "8730775e-045c-47d1-a080-e3b9882cec01");
     public virtual int HeartbeatIntervalSeconds => GetConfigValue("HEARTBEAT_INTERVAL_SECONDS", 30);
     public virtual int ZombieTimeoutMinutes => GetConfigValue("ZOMBIE_TIMEOUT_MINUTES", 30);
+
+    // Elastic Pool Auto-Scaling settings
+    public virtual bool EnableElasticPoolAutoScaling => GetConfigValue("ENABLE_ELASTIC_POOL_AUTO_SCALING", false);
+    public virtual int ElasticPoolScaleUpDtu => GetConfigValue("ELASTIC_POOL_SCALE_UP_DTU", 1600);
+    public virtual int ElasticPoolOriginalDtu => GetConfigValue("ELASTIC_POOL_ORIGINAL_DTU", 800);
+    public virtual string ElasticPoolResourceGroup => GetConfigValue("ELASTIC_POOL_RESOURCE_GROUP", "vn-rg-sa-sdp-solution-p");
+    public virtual string ElasticPoolServerName => GetConfigValue("ELASTIC_POOL_SERVER_NAME", "vn-sql-sa-sdp-solution-p-01");
+    public virtual string ElasticPoolName => GetConfigValue("ELASTIC_POOL_NAME", "vn-sql-sa-sdp-pool");
     public virtual bool EnableDetailedLogging => GetConfigValue("ENABLE_DETAILED_LOGGING", true);
 
     // AAS Connection settings

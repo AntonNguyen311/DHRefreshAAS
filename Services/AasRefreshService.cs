@@ -14,21 +14,25 @@ public class AasRefreshService
     private readonly ConfigurationService _config;
     private readonly ConnectionService _connectionService;
     private readonly AasScalingService _scalingService;
+    private readonly ElasticPoolScalingService _elasticPoolScalingService;
     private readonly ILogger<AasRefreshService> _logger;
 
     public AasRefreshService(
         ConfigurationService config,
         ConnectionService connectionService,
         AasScalingService scalingService,
+        ElasticPoolScalingService elasticPoolScalingService,
         ILogger<AasRefreshService> logger)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(connectionService);
         ArgumentNullException.ThrowIfNull(scalingService);
+        ArgumentNullException.ThrowIfNull(elasticPoolScalingService);
         ArgumentNullException.ThrowIfNull(logger);
         _config = config;
         _connectionService = connectionService;
         _scalingService = scalingService;
+        _elasticPoolScalingService = elasticPoolScalingService;
         _logger = logger;
     }
 
@@ -137,6 +141,22 @@ public class AasRefreshService
             .AddRetry(retryOptions)
             .Build();
 
+        // Auto-scale Elastic Pool BEFORE AAS (SQL needs capacity first)
+        var elasticPoolScaledUp = false;
+        _logger.LogInformation("Elastic Pool auto-scaling enabled: {Enabled}", _config.EnableElasticPoolAutoScaling);
+        if (_config.EnableElasticPoolAutoScaling)
+        {
+            try
+            {
+                elasticPoolScaledUp = await _elasticPoolScalingService.ScaleUpAsync(cancellationToken);
+                _logger.LogInformation("Elastic Pool scale-up result: {ScaledUp}", elasticPoolScaledUp);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Elastic Pool auto-scale up failed, continuing with current DTU");
+            }
+        }
+
         // Auto-scale AAS BEFORE connecting (scaling restarts the server, which kills existing connections)
         var scaledUp = false;
         _logger.LogInformation("AAS auto-scaling enabled: {Enabled}", _config.EnableAasAutoScaling);
@@ -207,6 +227,20 @@ public class AasRefreshService
                     _logger.LogCritical(scaleEx,
                         "CRITICAL: Failed to scale AAS back to {OriginalSku}! Manual intervention required to avoid cost overrun.",
                         _config.AasOriginalSku);
+                }
+            }
+
+            if (elasticPoolScaledUp)
+            {
+                try
+                {
+                    await _elasticPoolScalingService.ScaleDownAsync(CancellationToken.None);
+                }
+                catch (Exception scaleEx)
+                {
+                    _logger.LogCritical(scaleEx,
+                        "CRITICAL: Failed to scale Elastic Pool back to {OriginalDtu} DTU! Manual intervention required to avoid cost overrun.",
+                        _config.ElasticPoolOriginalDtu);
                 }
             }
         }
