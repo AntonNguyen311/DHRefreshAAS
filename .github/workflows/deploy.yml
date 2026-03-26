@@ -2,16 +2,20 @@ name: Deploy – Azure Function App (vn-fa-sa-sdp-p-aas)
 
 on:
   push:
-    branches: [master]
+    branches: [main, master]
   workflow_dispatch:
 
 env:
   DOTNET_VERSION: "8.0.x"
   AZURE_FUNCTIONAPP_NAME: vn-fa-sa-sdp-p-aas
+  SOLUTION_PATH: "DHRefreshAAS.sln"
+  TEST_PROJECT_PATH: "DHRefreshAAS.Tests/DHRefreshAAS.Tests.csproj"
+  FUNCTION_PROJECT_PATH: "DHRefreshAAS.csproj"
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -21,16 +25,24 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Restore
-        run: dotnet restore DHRefreshAAS.sln
+        run: dotnet restore "${{ env.SOLUTION_PATH }}"
 
       - name: Build
-        run: dotnet build DHRefreshAAS.sln -c Release --no-restore
+        run: dotnet build "${{ env.SOLUTION_PATH }}" -c Release --no-restore
 
       - name: Test
-        run: dotnet test DHRefreshAAS.sln -c Release --no-build --verbosity normal
+        run: dotnet test "${{ env.TEST_PROJECT_PATH }}" -c Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx" --results-directory ./TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-test-results
+          path: ./TestResults
+          if-no-files-found: warn
 
       - name: Publish
-        run: dotnet publish DHRefreshAAS.csproj -c Release -o ./publish --no-build
+        run: dotnet publish "${{ env.FUNCTION_PROJECT_PATH }}" -c Release -o ./publish --no-build
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -5,23 +5,38 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: "8.0.x"
+  SOLUTION_PATH: "DHRefreshAAS.sln"
+  TEST_PROJECT_PATH: "DHRefreshAAS.Tests/DHRefreshAAS.Tests.csproj"
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "8.0.x"
+          dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Restore
-        run: dotnet restore DHRefreshAAS.sln
+        run: dotnet restore "${{ env.SOLUTION_PATH }}"
 
       - name: Build
-        run: dotnet build DHRefreshAAS.sln -c Release --no-restore
+        run: dotnet build "${{ env.SOLUTION_PATH }}" -c Release --no-restore
 
       - name: Test
-        run: dotnet test DHRefreshAAS.sln -c Release --no-build --verbosity normal
+        run: dotnet test "${{ env.TEST_PROJECT_PATH }}" -c Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx" --results-directory ./TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-test-results
+          path: ./TestResults
+          if-no-files-found: warn
