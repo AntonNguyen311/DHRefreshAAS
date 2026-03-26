@@ -14,18 +14,22 @@ public class AasRefreshService
 {
     private readonly ConfigurationService _config;
     private readonly ConnectionService _connectionService;
+    private readonly AasScalingService _scalingService;
     private readonly ILogger<AasRefreshService> _logger;
 
     public AasRefreshService(
         ConfigurationService config,
         ConnectionService connectionService,
+        AasScalingService scalingService,
         ILogger<AasRefreshService> logger)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(connectionService);
+        ArgumentNullException.ThrowIfNull(scalingService);
         ArgumentNullException.ThrowIfNull(logger);
         _config = config;
         _connectionService = connectionService;
+        _scalingService = scalingService;
         _logger = logger;
     }
 
@@ -286,6 +290,22 @@ public class AasRefreshService
             "Processing {TotalObjects} refresh objects in {BatchCount} batches (batch size: {BatchSize}, max parallelism: {MaxParallelism})",
             validObjects.Count, batches.Count, batchSize, maxParallelism);
 
+        // Auto-scale AAS before processing batches
+        var scaledUp = false;
+        try
+        {
+        if (_config.EnableAasAutoScaling)
+        {
+            try
+            {
+                scaledUp = await _scalingService.ScaleUpAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "AAS auto-scale up failed, continuing with current SKU");
+            }
+        }
+
         var batchIndex = 0;
         foreach (var batch in batches)
         {
@@ -394,6 +414,25 @@ public class AasRefreshService
 
                 response.RefreshResults.Add(result);
                 progressCallback?.Invoke(result.TableName, result.IsSuccess, result.ErrorMessage);
+            }
+        }
+
+        } // end try
+        finally
+        {
+            // ALWAYS scale down - even if refresh fails, crashes, or times out
+            if (scaledUp)
+            {
+                try
+                {
+                    await _scalingService.ScaleDownAsync(CancellationToken.None); // Don't use cancellationToken - must complete
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogCritical(ex,
+                        "CRITICAL: Failed to scale AAS back to {OriginalSku}! Manual intervention required to avoid cost overrun.",
+                        _config.AasOriginalSku);
+                }
             }
         }
     }

@@ -66,6 +66,14 @@ public class ConfigurationService
     public virtual int SaveChangesTimeoutMinutes => GetConfigValue("SAVE_CHANGES_TIMEOUT_MINUTES", 15);
     public virtual int SaveChangesMaxParallelism => GetConfigValue("SAVE_CHANGES_MAX_PARALLELISM", 6);
     public virtual int SaveChangesBatchSize => GetConfigValue("SAVE_CHANGES_BATCH_SIZE", 5);
+
+    // AAS Auto-Scaling settings
+    public virtual bool EnableAasAutoScaling => GetConfigValue("ENABLE_AAS_AUTO_SCALING", false);
+    public virtual string AasScaleUpSku => GetConfigValue("AAS_SCALE_UP_SKU", "S9");
+    public virtual string AasOriginalSku => GetConfigValue("AAS_ORIGINAL_SKU", "S2");
+    public virtual string AasResourceGroup => GetConfigValue("AAS_RESOURCE_GROUP", "vn-rg-sa-sdp-solution-p");
+    public virtual string AasServerName => GetConfigValue("AAS_SERVER_NAME", "vnaassasdpp01");
+    public virtual string AasSubscriptionId => GetConfigValue("AAS_SUBSCRIPTION_ID", "8730775e-045c-47d1-a080-e3b9882cec01");
     public virtual int HeartbeatIntervalSeconds => GetConfigValue("HEARTBEAT_INTERVAL_SECONDS", 30);
     public virtual bool EnableDetailedLogging => GetConfigValue("ENABLE_DETAILED_LOGGING", true);
 

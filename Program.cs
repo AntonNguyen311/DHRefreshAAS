@@ -14,6 +14,7 @@ var host = new HostBuilder()
         services.AddSingleton<ConnectionService>();
         // Stateless orchestration service; Singleton matches DHRefreshAASController and avoids captive Scoped dependency.
         services.AddSingleton<AasRefreshService>();
+        services.AddSingleton<AasScalingService>();
         services.AddSingleton<OperationStorageService>();
         services.AddSingleton<ProgressTrackingService>();
         services.AddSingleton<ErrorHandlingService>();
