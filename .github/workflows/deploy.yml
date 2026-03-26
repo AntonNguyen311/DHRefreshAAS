@@ -5,15 +5,9 @@ on:
     branches: [master]
   workflow_dispatch:
 
-# OIDC permissions required for azure/login with user-assigned identity
-permissions:
-  id-token: write
-  contents: read
-
 env:
   DOTNET_VERSION: "8.0.x"
   AZURE_FUNCTIONAPP_NAME: vn-fa-sa-sdp-p-aas
-  AZURE_FUNCTIONAPP_PACKAGE_PATH: .
 
 jobs:
   build:
@@ -56,22 +50,9 @@ jobs:
           name: function-app
           path: ./publish
 
-      # Login using OIDC + user-assigned managed identity
-      # Requires these GitHub repository variables (not secrets):
-      #   AZURE_CLIENT_ID     – Client ID of the user-assigned managed identity
-      #   AZURE_TENANT_ID     – Azure AD tenant ID
-      #   AZURE_SUBSCRIPTION_ID – Azure subscription ID
-      # (Azure Deployment Center "Save" will create and configure these automatically.)
-      - name: Login to Azure (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
       - name: Deploy to Azure Function App
         uses: Azure/functions-action@v1
         with:
           app-name: ${{ env.AZURE_FUNCTIONAPP_NAME }}
           package: ./publish
-          # slot-name: production   # uncomment for deployment slots
+          publish-profile: ${{ secrets.AZURE_FUNCTIONAPP_PUBLISH_PROFILE }}
