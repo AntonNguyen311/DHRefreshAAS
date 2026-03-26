@@ -20,15 +20,18 @@ public class RefreshFlowSimulatorTests
     [Fact]
     public async Task ParallelPartitions_faster_than_sequential_for_identical_partitions()
     {
+        // Use larger delays so the difference is clear even on a slow CI runner
         var parts = new[]
         {
-            new SimPartition("a", 50, 50),
-            new SimPartition("b", 50, 50),
-            new SimPartition("c", 50, 50),
+            new SimPartition("a", 200, 200),
+            new SimPartition("b", 200, 200),
+            new SimPartition("c", 200, 200),
         };
         var sequential = await RefreshFlowSimulator.RunFullySequentialAsync(parts, commitMs: 0);
         var parallel = await RefreshFlowSimulator.RunParallelPartitionsAsync(parts, commitMs: 0);
-        Assert.True(sequential > parallel, $"sequential={sequential.TotalMilliseconds}ms should exceed parallel={parallel.TotalMilliseconds}ms");
+        // Parallel should be at least 40% faster than sequential (3 partitions × 400ms vs ~400ms)
+        Assert.True(parallel.TotalMilliseconds < sequential.TotalMilliseconds * 0.6,
+            $"sequential={sequential.TotalMilliseconds:F0}ms parallel={parallel.TotalMilliseconds:F0}ms — parallel should be at least 40% faster");
     }
 
     [Fact]
