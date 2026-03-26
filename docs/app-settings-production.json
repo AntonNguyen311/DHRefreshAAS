@@ -1,0 +1,127 @@
+[
+  {
+    "name": "FUNCTIONS_EXTENSION_VERSION",
+    "value": "~4",
+    "slotSetting": false
+  },
+  {
+    "name": "FUNCTIONS_WORKER_RUNTIME",
+    "value": "dotnet-isolated",
+    "slotSetting": false
+  },
+  {
+    "name": "WEBSITE_RUN_FROM_PACKAGE",
+    "value": "0",
+    "slotSetting": false
+  },
+  {
+    "name": "AzureWebJobsStorage",
+    "value": "DefaultEndpointsProtocol=https;AccountName=vnrgsasdpsolutionpa1bf;AccountKey=<YOUR_STORAGE_ACCOUNT_KEY>;EndpointSuffix=core.windows.net",
+    "slotSetting": false
+  },
+  {
+    "name": "AAS_AUTH_MODE",
+    "value": "ServicePrincipal",
+    "slotSetting": true
+  },
+  {
+    "name": "AAS_SERVER_URL",
+    "value": "asazure://southeastasia.asazure.windows.net/vnaassasdpp01",
+    "slotSetting": false
+  },
+  {
+    "name": "AAS_DATABASE",
+    "value": "PROD_DataAnalyticsModel",
+    "slotSetting": false
+  },
+  {
+    "name": "AAS_TENANT_ID",
+    "value": "1004261b-dfb7-4f37-830f-7438cb8a1b69",
+    "slotSetting": false
+  },
+  {
+    "name": "AAS_USER_ID",
+    "value": "a1a36d4a-351e-49f5-b579-1f4a7eaa5336",
+    "slotSetting": false
+  },
+  {
+    "name": "AAS_PASSWORD",
+    "value": "<YOUR_AAD_CLIENT_SECRET>",
+    "slotSetting": false
+  },
+  {
+    "name": "ENABLE_AAS_AUTO_SCALING",
+    "value": "true",
+    "slotSetting": false
+  },
+  {
+    "name": "ENABLE_ELASTIC_POOL_AUTO_SCALING",
+    "value": "true",
+    "slotSetting": false
+  },
+  {
+    "name": "ELASTIC_POOL_SCALE_UP_DTU",
+    "value": "1600",
+    "slotSetting": false
+  },
+  {
+    "name": "ELASTIC_POOL_ORIGINAL_DTU",
+    "value": "800",
+    "slotSetting": false
+  },
+  {
+    "name": "ELASTIC_POOL_RESOURCE_GROUP",
+    "value": "vn-rg-sa-sdp-solution-p",
+    "slotSetting": false
+  },
+  {
+    "name": "ELASTIC_POOL_SERVER_NAME",
+    "value": "vn-sql-sa-sdp-solution-p-01",
+    "slotSetting": false
+  },
+  {
+    "name": "ELASTIC_POOL_NAME",
+    "value": "vn-sql-sa-sdp-pool",
+    "slotSetting": false
+  },
+  {
+    "name": "MAX_RETRY_ATTEMPTS",
+    "value": "3",
+    "slotSetting": false
+  },
+  {
+    "name": "OPERATION_TIMEOUT_MINUTES",
+    "value": "60",
+    "slotSetting": false
+  },
+  {
+    "name": "SAVE_CHANGES_BATCH_SIZE",
+    "value": "5",
+    "slotSetting": false
+  },
+  {
+    "name": "SAVE_CHANGES_MAX_PARALLELISM",
+    "value": "8",
+    "slotSetting": false
+  },
+  {
+    "name": "SAVE_CHANGES_TIMEOUT_MINUTES",
+    "value": "15",
+    "slotSetting": false
+  },
+  {
+    "name": "ENABLE_DETAILED_LOGGING",
+    "value": "true",
+    "slotSetting": false
+  },
+  {
+    "name": "HEARTBEAT_INTERVAL_SECONDS",
+    "value": "30",
+    "slotSetting": false
+  },
+  {
+    "name": "ZOMBIE_TIMEOUT_MINUTES",
+    "value": "30",
+    "slotSetting": false
+  }
+]
