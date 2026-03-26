@@ -226,11 +226,10 @@ public class AasRefreshService
             return;
         }
 
-        // Process refresh objects (simplified approach)
+        // Validate and collect refresh objects
+        var validObjects = new List<(RefreshObject refreshObj, RefreshResult result)>();
         foreach (var refreshObj in requestData.RefreshObjects)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
             var result = new RefreshResult
             {
                 TableName = refreshObj.Table ?? "",
@@ -242,87 +241,138 @@ public class AasRefreshService
                 ExecutionTimeSeconds = 0
             };
 
-            var startTime = DateTime.UtcNow;
-
-            try
+            if (string.IsNullOrEmpty(refreshObj.Table))
             {
-                if (string.IsNullOrEmpty(refreshObj.Table))
+                result.ErrorMessage = "Table name is required";
+                response.RefreshResults.Add(result);
+                progressCallback?.Invoke(result.TableName, false, result.ErrorMessage);
+                continue;
+            }
+
+            var table = model.Tables.Find(refreshObj.Table);
+            if (table == null)
+            {
+                result.ErrorMessage = $"Table '{refreshObj.Table}' does not exist";
+                response.RefreshResults.Add(result);
+                progressCallback?.Invoke(result.TableName, false, result.ErrorMessage);
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(refreshObj.Partition) && !table.Partitions.ContainsName(refreshObj.Partition))
+            {
+                result.ErrorMessage = $"Partition '{refreshObj.Partition}' not found in table '{refreshObj.Table}'";
+                response.RefreshResults.Add(result);
+                progressCallback?.Invoke(result.TableName, false, result.ErrorMessage);
+                continue;
+            }
+
+            validObjects.Add((refreshObj, result));
+        }
+
+        if (validObjects.Count == 0)
+        {
+            _logger.LogInformation("No valid refresh objects found after validation.");
+            return;
+        }
+
+        // Process in batches: RequestRefresh + SaveChanges per batch
+        var batchSize = Math.Max(1, _config.SaveChangesBatchSize);
+        var maxParallelism = Math.Max(1, _config.SaveChangesMaxParallelism);
+        var effectiveSaveTimeoutMinutes = Math.Max(_config.SaveChangesTimeoutMinutes, enhancedRequest.OperationTimeoutMinutes);
+        var batches = validObjects.Chunk(batchSize).ToList();
+
+        _logger.LogInformation(
+            "Processing {TotalObjects} refresh objects in {BatchCount} batches (batch size: {BatchSize}, max parallelism: {MaxParallelism})",
+            validObjects.Count, batches.Count, batchSize, maxParallelism);
+
+        var batchIndex = 0;
+        foreach (var batch in batches)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            batchIndex++;
+
+            _logger.LogInformation("Starting batch {BatchIndex}/{BatchCount} with {BatchItemCount} objects",
+                batchIndex, batches.Count, batch.Length);
+
+            // RequestRefresh for all objects in this batch
+            foreach (var (refreshObj, result) in batch)
+            {
+                var startTime = DateTime.UtcNow;
+                try
                 {
-                    result.ErrorMessage = "Table name is required";
-                    result.IsSuccess = false;
-                }
-                else
-                {
-                    // Find the table
-                    var table = model.Tables.Find(refreshObj.Table);
-                    if (table == null)
+                    var table = model.Tables.Find(refreshObj.Table)!;
+                    if (string.IsNullOrEmpty(refreshObj.Partition))
                     {
-                        result.ErrorMessage = $"Table '{refreshObj.Table}' does not exist";
-                        result.IsSuccess = false;
+                        _logger.LogInformation("Requesting refresh for table '{TableName}'", refreshObj.Table);
+                        table.RequestRefresh(RefreshType.DataOnly);
                     }
                     else
                     {
-                        // Refresh table or partition
-                        if (string.IsNullOrEmpty(refreshObj.Partition))
-                        {
-                            // Refresh entire table
-                            _logger.LogInformation("Refreshing entire table '{TableName}' with DataOnly mode", refreshObj.Table);
-                            await Task.Run(() =>
-                            {
-                                cancellationToken.ThrowIfCancellationRequested();
-                                table.RequestRefresh(RefreshType.DataOnly);
-                            }, cancellationToken);
-                            result.IsSuccess = true;
-                        }
-                        else
-                        {
-                            // Refresh specific partition
-                            if (table.Partitions.ContainsName(refreshObj.Partition))
-                            {
-                                _logger.LogInformation("Refreshing partition '{PartitionName}' in table '{TableName}'",
-                                    refreshObj.Partition, refreshObj.Table);
-                                await Task.Run(() =>
-                                {
-                                    cancellationToken.ThrowIfCancellationRequested();
-                                    table.Partitions[refreshObj.Partition].RequestRefresh(RefreshType.DataOnly);
-                                }, cancellationToken);
-                                result.IsSuccess = true;
-                            }
-                            else
-                            {
-                                result.ErrorMessage = $"Partition '{refreshObj.Partition}' not found in table '{refreshObj.Table}'";
-                                result.IsSuccess = false;
-                            }
-                        }
+                        _logger.LogInformation("Requesting refresh for partition '{PartitionName}' in table '{TableName}'",
+                            refreshObj.Partition, refreshObj.Table);
+                        table.Partitions[refreshObj.Partition].RequestRefresh(RefreshType.DataOnly);
                     }
+                    result.IsSuccess = true;
                 }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error requesting refresh for '{TableName}': {ErrorMessage}",
+                        refreshObj.Table, ex.Message);
+                    result.IsSuccess = false;
+                    result.ErrorMessage = ex.Message;
+                    result.StackTrace = ex.StackTrace ?? "";
+                }
+                result.ExecutionTimeSeconds = (DateTime.UtcNow - startTime).TotalSeconds;
             }
-            catch (Exception ex)
+
+            // SaveChanges for this batch
+            var batchHasValidRequests = batch.Any(b => b.result.IsSuccess);
+            if (!batchHasValidRequests)
             {
-                _logger.LogError(ex, "Error refreshing table '{TableName}', partition '{PartitionName}': {ErrorMessage}",
-                    refreshObj.Table, refreshObj.Partition, ex.Message);
-                result.IsSuccess = false;
-                result.ErrorMessage = ex.Message;
-                result.StackTrace = ex.StackTrace ?? "";
+                _logger.LogWarning("Batch {BatchIndex} has no valid refresh requests, skipping SaveChanges", batchIndex);
+                foreach (var (_, result) in batch)
+                {
+                    response.RefreshResults.Add(result);
+                    progressCallback?.Invoke(result.TableName, result.IsSuccess, result.ErrorMessage);
+                }
+                continue;
             }
 
-            result.ExecutionTimeSeconds = (DateTime.UtcNow - startTime).TotalSeconds;
-            response.RefreshResults.Add(result);
-            
-            // Report progress if callback is provided
-            progressCallback?.Invoke(
-                result.TableName, 
-                result.IsSuccess, 
-                result.IsSuccess ? "" : result.ErrorMessage);
+            saveChangesCallback?.Invoke();
+            var saveSuccess = await ExecuteBatchSaveChangesAsync(
+                model, maxParallelism, effectiveSaveTimeoutMinutes, batchIndex, batches.Count, cancellationToken);
+
+            if (saveSuccess)
+            {
+                _logger.LogInformation("Batch {BatchIndex}/{BatchCount} SaveChanges completed successfully", batchIndex, batches.Count);
+            }
+            else
+            {
+                _logger.LogError("Batch {BatchIndex}/{BatchCount} SaveChanges failed", batchIndex, batches.Count);
+            }
+
+            // Update results for this batch
+            foreach (var (_, result) in batch)
+            {
+                if (!saveSuccess && result.IsSuccess)
+                {
+                    result.IsSuccess = false;
+                    result.ErrorMessage = $"SaveChanges failed for batch {batchIndex}";
+                }
+                response.RefreshResults.Add(result);
+                progressCallback?.Invoke(result.TableName, result.IsSuccess, result.ErrorMessage);
+            }
         }
+    }
 
-        var effectiveSaveTimeoutMinutes = Math.Max(_config.SaveChangesTimeoutMinutes, enhancedRequest.OperationTimeoutMinutes);
-        var maxParallelism = Math.Max(1, _config.SaveChangesMaxParallelism);
-
-        // Save all changes at once with timeout and retry logic for deadlocks.
-        var saveChangesCompleted = false;
-        string? saveFailureMessage = null;
-        CancellationTokenSource? saveTimeoutCts = null;
+    private async Task<bool> ExecuteBatchSaveChangesAsync(
+        Model model,
+        int maxParallelism,
+        int timeoutMinutes,
+        int batchIndex,
+        int totalBatches,
+        CancellationToken cancellationToken)
+    {
         const int maxRetries = 3;
 
         var saveRetryOptions = new RetryStrategyOptions
@@ -334,11 +384,8 @@ public class AasRefreshService
             OnRetry = args =>
             {
                 _logger.LogInformation(
-                    "Deadlock detected during SaveChanges. Retrying in {DelaySeconds}s (Attempt {Attempt}/{MaxAttempts}). Error: {ErrorMessage}",
-                    args.RetryDelay.TotalSeconds,
-                    args.AttemptNumber + 2,
-                    maxRetries + 1,
-                    args.Outcome.Exception?.Message);
+                    "Deadlock in batch {BatchIndex} SaveChanges. Retrying in {DelaySeconds}s (Attempt {Attempt}/{MaxAttempts})",
+                    batchIndex, args.RetryDelay.TotalSeconds, args.AttemptNumber + 2, maxRetries + 1);
                 return ValueTask.CompletedTask;
             }
         };
@@ -347,16 +394,14 @@ public class AasRefreshService
             .AddRetry(saveRetryOptions)
             .Build();
 
+        using var saveTimeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(timeoutMinutes));
+        using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, saveTimeoutCts.Token);
+
         try
         {
             _logger.LogInformation(
-                "Saving model changes with timeout of {TimeoutMinutes} minutes and max parallelism {MaxParallelism}.",
-                effectiveSaveTimeoutMinutes,
-                maxParallelism);
-            saveChangesCallback?.Invoke();
-
-            saveTimeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(effectiveSaveTimeoutMinutes));
-            using var combinedSaveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, saveTimeoutCts.Token);
+                "Batch {BatchIndex}/{TotalBatches} SaveChanges starting (timeout: {Timeout}min, parallelism: {Parallelism})",
+                batchIndex, totalBatches, timeoutMinutes, maxParallelism);
 
             await savePipeline.ExecuteAsync(async token =>
             {
@@ -365,50 +410,24 @@ public class AasRefreshService
                     token.ThrowIfCancellationRequested();
                     model.SaveChanges(new SaveOptions { MaxParallelism = maxParallelism });
                 }, token);
-            }, combinedSaveCts.Token);
+            }, combinedCts.Token);
 
-            _logger.LogInformation("SaveChanges() completed successfully.");
-            saveChangesCompleted = true;
+            return true;
+        }
+        catch (OperationCanceledException) when (saveTimeoutCts.Token.IsCancellationRequested)
+        {
+            _logger.LogError("Batch {BatchIndex} SaveChanges timed out after {Timeout} minutes", batchIndex, timeoutMinutes);
+            return false;
         }
         catch (OperationCanceledException)
         {
-            if (cancellationToken.IsCancellationRequested)
-            {
-                saveFailureMessage = "Operation canceled or timed out before SaveChanges finished.";
-                _logger.LogError(saveFailureMessage);
-            }
-            else if (saveTimeoutCts?.Token.IsCancellationRequested == true)
-            {
-                saveFailureMessage = $"SaveChanges operation timed out after {effectiveSaveTimeoutMinutes} minutes.";
-                _logger.LogError(saveFailureMessage);
-            }
-            else
-            {
-                saveFailureMessage = "SaveChanges was canceled.";
-                _logger.LogError(saveFailureMessage);
-            }
+            _logger.LogError("Batch {BatchIndex} SaveChanges was canceled", batchIndex);
+            return false;
         }
         catch (Exception ex)
         {
-            if (IsDeadlockException(ex))
-            {
-                saveFailureMessage = "SaveChanges failed after multiple retry attempts due to persistent deadlocks.";
-                _logger.LogError(ex, saveFailureMessage);
-            }
-            else
-            {
-                saveFailureMessage = $"SaveChanges failed: {ex.Message}";
-                _logger.LogError(ex, "Error saving changes: {ErrorMessage}", ex.Message);
-            }
-        }
-        finally
-        {
-            saveTimeoutCts?.Dispose();
-        }
-
-        if (!saveChangesCompleted)
-        {
-            ApplySaveFailureToResponse(response, saveFailureMessage ?? "SaveChanges did not complete.");
+            _logger.LogError(ex, "Batch {BatchIndex} SaveChanges failed: {ErrorMessage}", batchIndex, ex.Message);
+            return false;
         }
     }
 

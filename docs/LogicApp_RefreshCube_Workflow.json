@@ -62,10 +62,64 @@
           ]
         }
       },
+      "varEmailBody": {
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "varEmailBody",
+              "type": "string"
+            }
+          ]
+        },
+        "runAfter": {
+          "Get_List_CubeName": [
+            "Succeeded"
+          ]
+        }
+      },
+      "varDatabaseResults": {
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "varDatabaseResults",
+              "type": "array",
+              "value": []
+            }
+          ]
+        },
+        "runAfter": {
+          "varEmailBody": [
+            "Succeeded"
+          ]
+        }
+      },
       "For_each": {
         "type": "Foreach",
-        "foreach": "@body('Get_List_CubeName')?['resultsets']?['Table1']",
+        "foreach": "@body('Get_List_CubeName')?['ResultSets']?['Table1']",
+        "runtimeConfiguration": {
+          "concurrency": {
+            "repetitions": 4
+          }
+        },
         "actions": {
+          "Current_Database": {
+            "type": "Compose",
+            "inputs": "Processing database: @{items('For_each')?['CubeModelName']}"
+          },
+          "Reset_varEmailBody": {
+            "type": "SetVariable",
+            "inputs": {
+              "name": "varEmailBody",
+              "value": ""
+            },
+            "runAfter": {
+              "Current_Database": [
+                "Succeeded"
+              ]
+            }
+          },
           "Get_AAS_Model_Tables_JSON_Format": {
             "type": "ApiConnection",
             "inputs": {
@@ -79,6 +133,11 @@
                 "query": "DECLARE @CountryKey INT = (SELECT TOP 1 MasterSettings_CountryKey FROM etl.vw_EtlLog etllog WHERE etllog.LineageKey = @{variables('MasterEtlLineageKey')} AND MasterSettings_CountryKey IS NOT NULL) \nSELECT cube.CubeName as database_name, \n        refresh_objects = JSON_QUERY(CONCAT('[', STRING_AGG(CONCAT('{\"table\":\"', STRING_ESCAPE(cube.CubeTableName, 'json'), '\"', ',', '\"partition\":\"', STRING_ESCAPE(cube.Partition, 'json'), '\"}'), ','), ']'))\nFROM\n(\n    SELECT Distinct SchemaName, TableName, @CountryKey AS CountryKey \n    FROM etl.vw_EtlLog etllog\n    WHERE etllog.LineageKey = @{variables('MasterEtlLineageKey')} \n        AND etllog.StageName = 'LOAD' \n        AND etllog.ActivityStatus = 'Succeeded' \n        AND coalesce(etllog.ActivityOutput_LoadInsertedRows, 0) \n            + coalesce(etllog.ActivityOutput_LoadUpdatedRows, 0) \n            + coalesce(etllog.ActivityOutput_LoadDeletedRows, 0) > 0\n    UNION\n    SELECT 'ETL' SchemaName, 'vw_EtlLog' TableName, @CountryKey AS CountryKey\n    UNION\n    SELECT SchemaName, TableName, @CountryKey AS CountryKey FROM etl.datawarehouseandcubemapping WHERE IsAlwayRefreshed = 1\n) etlLog\n    INNER JOIN etl.datawarehouseandcubemapping cube ON etllog.SchemaName=cube.SchemaName \n                                                    AND etllog.TableName=cube.TableName\n                                                    AND cube.CubeName = '@{items('For_each')?['CubeModelName']}'\nGROUP BY CubeName\nFOR JSON PATH, WITHOUT_ARRAY_WRAPPER"
               },
               "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+            },
+            "runAfter": {
+              "Reset_varEmailBody": [
+                "Succeeded"
+              ]
             }
           },
           "Condition": {
@@ -93,7 +152,22 @@
                 }
               ]
             },
-            "actions": {},
+            "actions": {
+              "Append_Skipped_Result": {
+                "type": "AppendToArrayVariable",
+                "inputs": {
+                  "name": "varDatabaseResults",
+                  "value": {
+                    "database": "@{items('For_each')?['CubeModelName']}",
+                    "status": "skipped",
+                    "reason": "No tables to refresh",
+                    "startTime": "@{utcNow()}",
+                    "endTime": "@{utcNow()}",
+                    "operationId": ""
+                  }
+                }
+              }
+            },
             "else": {
               "actions": {
                 "DHRefreshAAS_HttpStart": {
@@ -150,6 +224,25 @@
                     ]
                   }
                 },
+                "Append_Database_Result": {
+                  "type": "AppendToArrayVariable",
+                  "inputs": {
+                    "name": "varDatabaseResults",
+                    "value": {
+                      "database": "@{items('For_each')?['CubeModelName']}",
+                      "status": "@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status']}",
+                      "startTime": "@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['startTime']}",
+                      "endTime": "@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['endTime']}",
+                      "operationId": "@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['operationId']}"
+                    }
+                  },
+                  "runAfter": {
+                    "Until_Operation_Complete": [
+                      "Succeeded",
+                      "Failed"
+                    ]
+                  }
+                },
                 "Condition_1": {
                   "type": "If",
                   "expression": {
@@ -174,8 +267,8 @@
                         "method": "post",
                         "body": {
                           "To": "mina.my@deheus.com, Vincent.Quyen@deheus.com",
-                          "Subject": "Refesh Cube Fail",
-                          "Body": "<p class=\"editor-paragraph\">Dear Team,<br><br>Lỗi khi đang refresh Cube model : ( Cloud )<br><br>Quy trình RefreshCube đã gặp lỗi: @{items('For_each')?['CubeModelName']}<br><br>- CreatedTime: @{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['startTime']}<br>- LastUpdatedTime: @{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['endTime']}<br>- Operation ID: @{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['operationId']}<br>- Final Status: @{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status']}<br>- Danh sách các đối tượng đã được gửi đi để refresh trong lần chạy này:<br>@{variables('varEmailBody')}<br><br><br>Many Thanks,<br>Mina My</p>",
+                          "Subject": "Refresh Cube Fail - @{items('For_each')?['CubeModelName']}",
+                          "Body": "<p class=\"editor-paragraph\">Dear Team,<br><br>Loi khi dang refresh Cube model : ( Cloud )<br><br>Quy trinh RefreshCube da gap loi: @{items('For_each')?['CubeModelName']}<br><br>- CreatedTime: @{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['startTime']}<br>- LastUpdatedTime: @{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['endTime']}<br>- Operation ID: @{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['operationId']}<br>- Final Status: @{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status']}<br>- Danh sach cac doi tuong da duoc gui di de refresh trong lan chay nay:<br>@{variables('varEmailBody')}<br><br><br>Many Thanks,<br>Mina My</p>",
                           "Importance": "Normal"
                         },
                         "path": "/v2/Mail"
@@ -198,7 +291,7 @@
                           "type": "AppendToStringVariable",
                           "inputs": {
                             "name": "varEmailBody",
-                            "value": "@concat(item()?['TableName'], ' → ', if(equals(item()?['IsSuccess'], true), '✅ Success', '❌ Failed'), ', Error: ', if(empty(item()?['ErrorMessage']), 'None', item()?['ErrorMessage']))"
+                            "value": "@concat(item()?['TableName'], ' -> ', if(equals(item()?['IsSuccess'], true), 'Success', 'Failed'), ', Error: ', if(empty(item()?['ErrorMessage']), 'None', item()?['ErrorMessage']))"
                           }
                         },
                         "Append_to_string_variable_1": {
@@ -225,7 +318,7 @@
                     "actions": {}
                   },
                   "runAfter": {
-                    "Until_Operation_Complete": [
+                    "Append_Database_Result": [
                       "Succeeded"
                     ]
                   }
@@ -240,23 +333,61 @@
           }
         },
         "runAfter": {
-          "varEmailBody": [
+          "varDatabaseResults": [
             "Succeeded"
           ]
         }
       },
-      "varEmailBody": {
-        "type": "InitializeVariable",
+      "Build_Summary_Table": {
+        "type": "Select",
         "inputs": {
-          "variables": [
-            {
-              "name": "varEmailBody",
-              "type": "string"
-            }
-          ]
+          "from": "@variables('varDatabaseResults')",
+          "select": {
+            "Database": "@item()?['database']",
+            "Status": "@item()?['status']",
+            "Start Time": "@item()?['startTime']",
+            "End Time": "@item()?['endTime']",
+            "Operation ID": "@item()?['operationId']"
+          }
         },
         "runAfter": {
-          "Get_List_CubeName": [
+          "For_each": [
+            "Succeeded",
+            "Failed"
+          ]
+        }
+      },
+      "Create_Summary_HTML": {
+        "type": "Table",
+        "inputs": {
+          "from": "@body('Build_Summary_Table')",
+          "format": "HTML"
+        },
+        "runAfter": {
+          "Build_Summary_Table": [
+            "Succeeded"
+          ]
+        }
+      },
+      "Send_Summary_Email": {
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['office365']['connectionId']"
+            }
+          },
+          "method": "post",
+          "body": {
+            "To": "mina.my@deheus.com, Anton.Tuan@deheus.com",
+            "Subject": "Refresh Cube Summary - @{utcNow()}",
+            "Body": "<p class=\"editor-paragraph\">Dear Team,<br><br>Refresh Cube Summary Report<br><br>Total databases: @{length(variables('varDatabaseResults'))}<br><br>@{body('Create_Summary_HTML')}<br><br>Many Thanks,<br>Mina My</p>",
+            "Importance": "Normal"
+          },
+          "path": "/v2/Mail"
+        },
+        "runAfter": {
+          "Create_Summary_HTML": [
             "Succeeded"
           ]
         }
