@@ -1,8 +1,7 @@
 using Microsoft.AnalysisServices.Tabular;
+using Microsoft.Identity.Client;
 using Microsoft.Extensions.Logging;
 using System.Text;
-using System.Net.Http;
-using System.Text.Json;
 using DHRefreshAAS.Models;
 
 namespace DHRefreshAAS;
@@ -165,58 +164,46 @@ public class ConnectionService
                 result.ClientId = clientId;
                 result.TenantId = tenantId;
 
-                // Test token acquisition using OAuth2 client credentials flow
-                using var httpClient = new HttpClient();
                 var tokenEndpoint = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token";
-                
-                var tokenRequest = new FormUrlEncodedContent(new[]
-                {
-                    new KeyValuePair<string, string>("grant_type", "client_credentials"),
-                    new KeyValuePair<string, string>("client_id", clientId),
-                    new KeyValuePair<string, string>("client_secret", clientSecret),
-                    new KeyValuePair<string, string>("scope", "https://*.asazure.windows.net/.default")
-                });
-
                 _logger.LogInformation("Testing token acquisition for Service Principal: {ClientId}", clientId);
-                
-                var response = await httpClient.PostAsync(tokenEndpoint, tokenRequest, cancellationToken);
-                var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
 
                 result.TokenEndpoint = tokenEndpoint;
-                result.HttpStatusCode = (int)response.StatusCode;
-                result.ResponseBody = responseContent;
 
-                if (response.IsSuccessStatusCode)
-                {
-                    var tokenResponse = System.Text.Json.JsonSerializer.Deserialize<JsonElement>(responseContent);
-                    if (tokenResponse.TryGetProperty("access_token", out var tokenElement))
-                    {
-                        var token = tokenElement.GetString();
-                        result.IsSuccessful = true;
-                        result.TokenAcquired = !string.IsNullOrEmpty(token);
-                        result.TokenLength = token?.Length ?? 0;
-                        
-                        // Extract token info
-                        if (tokenResponse.TryGetProperty("expires_in", out var expiresElement))
-                        {
-                            result.TokenExpiresInSeconds = expiresElement.GetInt32();
-                        }
-                        if (tokenResponse.TryGetProperty("token_type", out var typeElement))
-                        {
-                            result.TokenType = typeElement.GetString() ?? "";
-                        }
-                    }
-                }
-                else
-                {
-                    result.ErrorMessage = $"Token acquisition failed with status {response.StatusCode}";
-                    _logger.LogError("Token acquisition failed: {StatusCode} - {Content}", response.StatusCode, responseContent);
-                }
+                var app = ConfidentialClientApplicationBuilder
+                    .Create(clientId)
+                    .WithClientSecret(clientSecret)
+                    .WithTenantId(tenantId)
+                    .Build();
+
+                var authResult = await app
+                    .AcquireTokenForClient(new[] { "https://*.asazure.windows.net/.default" })
+                    .ExecuteAsync(cancellationToken);
+
+                result.HttpStatusCode = 200;
+                result.IsSuccessful = true;
+                result.TokenAcquired = !string.IsNullOrWhiteSpace(authResult.AccessToken);
+                result.TokenLength = authResult.AccessToken?.Length ?? 0;
+                result.TokenType = authResult.TokenType;
+                result.TokenExpiresInSeconds = (int)Math.Max(0, (authResult.ExpiresOn.UtcDateTime - DateTime.UtcNow).TotalSeconds);
+                result.ResponseBody = "MSAL token acquisition succeeded.";
             }
             else
             {
                 result.ErrorMessage = $"Token test only supports ServicePrincipal mode, current mode: {_config.AasAuthMode}";
             }
+        }
+        catch (MsalServiceException ex)
+        {
+            result.ErrorMessage = ex.Message;
+            result.ExceptionType = ex.GetType().Name;
+            result.HttpStatusCode = ex.StatusCode;
+            _logger.LogError(ex, "Token acquisition test failed with MSAL service error: {ErrorMessage}", ex.Message);
+        }
+        catch (MsalClientException ex)
+        {
+            result.ErrorMessage = ex.Message;
+            result.ExceptionType = ex.GetType().Name;
+            _logger.LogError(ex, "Token acquisition test failed with MSAL client error: {ErrorMessage}", ex.Message);
         }
         catch (Exception ex)
         {

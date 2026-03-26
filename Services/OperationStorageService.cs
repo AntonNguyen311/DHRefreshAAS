@@ -95,6 +95,8 @@ public class OperationStorageService
 {
     private readonly TableClient _tableClient;
     private readonly ILogger<OperationStorageService> _logger;
+    private readonly SemaphoreSlim _initLock = new(1, 1);
+    private volatile bool _tableInitialized;
     private const string TableName = "OperationStatus";
     
     public OperationStorageService(ILogger<OperationStorageService> logger)
@@ -107,20 +109,34 @@ public class OperationStorageService
                              ?? "UseDevelopmentStorage=true"; // Fallback to local storage emulator
         
         _tableClient = new TableClient(connectionString, TableName);
-        
-        // Create table if it doesn't exist
-        _ = Task.Run(async () =>
+    }
+
+    public virtual Task InitializeAsync(CancellationToken cancellationToken = default) =>
+        EnsureTableInitializedAsync(cancellationToken);
+
+    private async Task EnsureTableInitializedAsync(CancellationToken cancellationToken = default)
+    {
+        if (_tableInitialized)
         {
-            try
+            return;
+        }
+
+        await _initLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_tableInitialized)
             {
-                await _tableClient.CreateIfNotExistsAsync();
-                _logger.LogInformation("Operation storage table initialized: {TableName}", TableName);
+                return;
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to initialize operation storage table: {TableName}", TableName);
-            }
-        });
+
+            await _tableClient.CreateIfNotExistsAsync(cancellationToken);
+            _tableInitialized = true;
+            _logger.LogInformation("Operation storage table initialized: {TableName}", TableName);
+        }
+        finally
+        {
+            _initLock.Release();
+        }
     }
     
     /// <summary>
@@ -130,6 +146,7 @@ public class OperationStorageService
     {
         try
         {
+            await EnsureTableInitializedAsync();
             var entity = new OperationEntity(operation);
             await _tableClient.UpsertEntityAsync(entity, TableUpdateMode.Replace);
             _logger.LogDebug("Operation {OperationId} stored successfully", operation.OperationId);
@@ -149,6 +166,7 @@ public class OperationStorageService
     {
         try
         {
+            await EnsureTableInitializedAsync();
             var response = await _tableClient.GetEntityAsync<OperationEntity>("operations", operationId);
             return response.Value.ToOperationStatus();
         }
@@ -171,10 +189,13 @@ public class OperationStorageService
     {
         try
         {
+            await EnsureTableInitializedAsync();
             var operations = new List<OperationStatus>();
-            
+            var windowStart = DateTimeOffset.UtcNow.AddDays(-7);
+            var filter = $"PartitionKey eq 'operations' and Timestamp ge datetime'{windowStart.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}'";
+
             await foreach (var entity in _tableClient.QueryAsync<OperationEntity>(
-                filter: $"PartitionKey eq 'operations'",
+                filter: filter,
                 maxPerPage: count))
             {
                 operations.Add(entity.ToOperationStatus());
@@ -196,6 +217,7 @@ public class OperationStorageService
     {
         try
         {
+            await EnsureTableInitializedAsync();
             var running = 0;
             var completed = 0;
             var failed = 0;

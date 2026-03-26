@@ -64,6 +64,7 @@ public class ConfigurationService
     public virtual int ConnectionTimeoutMinutes => GetConfigValue("CONNECTION_TIMEOUT_MINUTES", 10);
     public virtual int OperationTimeoutMinutes => GetConfigValue("OPERATION_TIMEOUT_MINUTES", 60);
     public virtual int SaveChangesTimeoutMinutes => GetConfigValue("SAVE_CHANGES_TIMEOUT_MINUTES", 15);
+    public virtual int SaveChangesMaxParallelism => GetConfigValue("SAVE_CHANGES_MAX_PARALLELISM", 3);
     public virtual int HeartbeatIntervalSeconds => GetConfigValue("HEARTBEAT_INTERVAL_SECONDS", 30);
     public virtual bool EnableDetailedLogging => GetConfigValue("ENABLE_DETAILED_LOGGING", true);
 

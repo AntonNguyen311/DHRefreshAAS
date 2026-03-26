@@ -6,28 +6,7 @@ using DHRefreshAAS.Controllers;
 using DHRefreshAAS.Services;
 
 var host = new HostBuilder()
-    .ConfigureFunctionsWebApplication(builder =>
-    {
-        // Configure CORS for Azure Portal and other origins
-        builder.Services.AddCors(options =>
-        {
-            options.AddDefaultPolicy(policy =>
-            {
-                policy.WithOrigins(
-                    "https://portal.azure.com",
-                    "https://ms.portal.azure.com", 
-                    "https://preview.portal.azure.com",
-                    "https://rc.portal.azure.com",
-                    "https://canary.portal.azure.com",
-                    "https://localhost:3000",
-                    "http://localhost:3000"
-                )
-                .AllowAnyMethod()
-                .AllowAnyHeader()
-                .SetIsOriginAllowedToAllowWildcardSubdomains();
-            });
-        });
-    })
+    .ConfigureFunctionsWebApplication()
     .ConfigureServices(services =>
     {
         // Register configuration services
@@ -44,4 +23,5 @@ var host = new HostBuilder()
     })
     .Build();
 
+await host.Services.GetRequiredService<OperationStorageService>().InitializeAsync();
 host.Run();

@@ -11,6 +11,10 @@ namespace DHRefreshAAS.Services;
 public class RequestProcessingService
 {
     private readonly ILogger<RequestProcessingService> _logger;
+    private static readonly JsonSerializerOptions RequestJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 
     public RequestProcessingService(ILogger<RequestProcessingService> logger)
     {
@@ -22,7 +26,8 @@ public class RequestProcessingService
     /// </summary>
     public virtual async Task<PostData?> ParseAndValidateRequestAsync(HttpRequestData request)
     {
-        string requestBody = await new StreamReader(request.Body).ReadToEndAsync();
+        using var reader = new StreamReader(request.Body);
+        string requestBody = await reader.ReadToEndAsync();
         
         if (string.IsNullOrWhiteSpace(requestBody))
         {
@@ -33,10 +38,7 @@ public class RequestProcessingService
         PostData? requestData;
         try
         {
-            requestData = JsonSerializer.Deserialize<PostData>(requestBody, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            });
+            requestData = JsonSerializer.Deserialize<PostData>(requestBody, RequestJsonOptions);
         }
         catch (JsonException jsonEx)
         {

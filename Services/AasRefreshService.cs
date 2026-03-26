@@ -1,6 +1,8 @@
 using Microsoft.AnalysisServices.Tabular;
 using Microsoft.Extensions.Logging;
 using DHRefreshAAS.Models;
+using Polly;
+using Polly.Retry;
 
 namespace DHRefreshAAS;
 
@@ -102,71 +104,77 @@ public class AasRefreshService
         Action? saveChangesCallback = null)
     {
         Server? asSrv = null;
+        var maxAttempts = Math.Max(1, requestData.MaxRetryAttempts);
+        var connectSec = _config.GetConnectTimeoutSeconds(requestData.ConnectionTimeoutMinutes);
+        var commandSec = _config.GetCommandTimeoutSeconds(
+            requestData.OperationTimeoutMinutes,
+            _config.SaveChangesTimeoutMinutes);
 
-        for (int attempt = 1; attempt <= requestData.MaxRetryAttempts; attempt++)
+        var retryOptions = new RetryStrategyOptions
         {
-            try
+            MaxRetryAttempts = maxAttempts - 1,
+            BackoffType = DelayBackoffType.Exponential,
+            Delay = TimeSpan.FromSeconds(Math.Max(1, requestData.BaseDelaySeconds)),
+            ShouldHandle = new PredicateBuilder().Handle<Exception>(),
+            OnRetry = async args =>
             {
-                _logger.LogInformation("Refresh attempt {Attempt} of {MaxAttempts}", attempt, requestData.MaxRetryAttempts);
-
-                var connectSec = _config.GetConnectTimeoutSeconds(requestData.ConnectionTimeoutMinutes);
-                var commandSec = _config.GetCommandTimeoutSeconds(
-                    requestData.OperationTimeoutMinutes,
-                    _config.SaveChangesTimeoutMinutes);
-
-                asSrv = await _connectionService.CreateServerConnectionAsync(cancellationToken, connectSec, commandSec);
-
-                if (asSrv?.Connected == true)
-                {
-                    await ExecuteRefreshOperationsAsync(
-                        asSrv,
-                        requestData,
-                        response,
-                        cancellationToken,
-                        progressCallback,
-                        saveChangesCallback);
-
-                    response.IsSuccess = !response.RefreshResults.Exists(r => !r.IsSuccess);
-                    if (response.IsSuccess)
-                    {
-                        response.Message = "Successfully refreshed all specified tables/partitions.";
-                    }
-                    else if (string.IsNullOrWhiteSpace(response.Message))
-                    {
-                        response.Message = "Some table/partition refreshes failed. See RefreshResults.";
-                    }
-
-                    _logger.LogInformation("Refresh completed successfully on attempt {Attempt}", attempt);
-                    break;
-                }
-            }
-            catch (Exception ex) when (attempt < requestData.MaxRetryAttempts)
-            {
-                var delay = TimeSpan.FromSeconds(requestData.BaseDelaySeconds * Math.Pow(2, attempt - 1));
-
-                _logger.LogWarning(ex, "Refresh attempt {Attempt} failed. Retrying in {DelaySeconds} seconds. Error: {ErrorMessage}",
-                    attempt, delay.TotalSeconds, ex.Message);
-
-                // Clean up current connection
+                _logger.LogWarning(
+                    args.Outcome.Exception,
+                    "Refresh attempt {Attempt} failed. Retrying in {DelaySeconds} seconds. Error: {ErrorMessage}",
+                    args.AttemptNumber + 1,
+                    args.RetryDelay.TotalSeconds,
+                    args.Outcome.Exception?.Message);
                 await _connectionService.SafeDisconnectAsync(asSrv);
                 asSrv = null;
-
-                // Wait before retry with exponential backoff
-                await Task.Delay(delay, cancellationToken);
             }
-            catch (Exception ex) when (attempt >= requestData.MaxRetryAttempts)
+        };
+
+        var pipeline = new ResiliencePipelineBuilder()
+            .AddRetry(retryOptions)
+            .Build();
+
+        try
+        {
+            await pipeline.ExecuteAsync(async token =>
             {
-                _logger.LogError(ex, "All {MaxAttempts} refresh attempts failed. Final error: {ErrorMessage}",
-                    requestData.MaxRetryAttempts, ex.Message);
-                response.Message = $"All retry attempts failed. Final error: {ex.Message}";
-                response.StackTrace = ex.StackTrace ?? "";
-                response.IsSuccess = false;
-                break;
+                _logger.LogInformation("Refresh attempt started.");
+                asSrv = await _connectionService.CreateServerConnectionAsync(token, connectSec, commandSec);
+                if (asSrv?.Connected != true)
+                {
+                    throw new InvalidOperationException("Failed to connect to AAS server");
+                }
+
+                await ExecuteRefreshOperationsAsync(
+                    asSrv,
+                    requestData,
+                    response,
+                    token,
+                    progressCallback,
+                    saveChangesCallback);
+            }, cancellationToken);
+
+            response.IsSuccess = !response.RefreshResults.Exists(r => !r.IsSuccess);
+            if (response.IsSuccess)
+            {
+                response.Message = "Successfully refreshed all specified tables/partitions.";
+            }
+            else if (string.IsNullOrWhiteSpace(response.Message))
+            {
+                response.Message = "Some table/partition refreshes failed. See RefreshResults.";
             }
         }
-
-        // Always clean up connection
-        await _connectionService.SafeDisconnectAsync(asSrv);
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "All {MaxAttempts} refresh attempts failed. Final error: {ErrorMessage}",
+                maxAttempts, ex.Message);
+            response.Message = $"All retry attempts failed. Final error: {ex.Message}";
+            response.StackTrace = ex.StackTrace ?? "";
+            response.IsSuccess = false;
+        }
+        finally
+        {
+            await _connectionService.SafeDisconnectAsync(asSrv);
+        }
     }
 
     /// <summary>
@@ -258,11 +266,11 @@ public class AasRefreshService
                         if (string.IsNullOrEmpty(refreshObj.Partition))
                         {
                             // Refresh entire table
-                            _logger.LogInformation("Refreshing entire table '{TableName}'", refreshObj.Table);
+                            _logger.LogInformation("Refreshing entire table '{TableName}' with DataOnly mode", refreshObj.Table);
                             await Task.Run(() =>
                             {
                                 cancellationToken.ThrowIfCancellationRequested();
-                                table.RequestRefresh(RefreshType.Full);
+                                table.RequestRefresh(RefreshType.DataOnly);
                             }, cancellationToken);
                             result.IsSuccess = true;
                         }
@@ -276,7 +284,7 @@ public class AasRefreshService
                                 await Task.Run(() =>
                                 {
                                     cancellationToken.ThrowIfCancellationRequested();
-                                    table.Partitions[refreshObj.Partition].RequestRefresh(RefreshType.Full);
+                                    table.Partitions[refreshObj.Partition].RequestRefresh(RefreshType.DataOnly);
                                 }, cancellationToken);
                                 result.IsSuccess = true;
                             }
@@ -309,99 +317,93 @@ public class AasRefreshService
         }
 
         var effectiveSaveTimeoutMinutes = Math.Max(_config.SaveChangesTimeoutMinutes, enhancedRequest.OperationTimeoutMinutes);
+        var maxParallelism = Math.Max(1, _config.SaveChangesMaxParallelism);
 
-        // Save all changes at once with timeout and retry logic for deadlocks
-        CancellationTokenSource? saveTimeoutCts = null;
-        int retryCount = 0;
-        const int maxRetries = 3;
-        const int baseDelayMs = 1000;
+        // Save all changes at once with timeout and retry logic for deadlocks.
         var saveChangesCompleted = false;
         string? saveFailureMessage = null;
+        CancellationTokenSource? saveTimeoutCts = null;
+        const int maxRetries = 3;
 
-        while (retryCount <= maxRetries)
+        var saveRetryOptions = new RetryStrategyOptions
         {
-            try
+            MaxRetryAttempts = maxRetries,
+            BackoffType = DelayBackoffType.Exponential,
+            Delay = TimeSpan.FromSeconds(1),
+            ShouldHandle = new PredicateBuilder().Handle<Exception>(IsDeadlockException),
+            OnRetry = args =>
             {
                 _logger.LogInformation(
-                    "Saving model changes with timeout of {TimeoutMinutes} minutes... (Attempt {Attempt}/{MaxAttempts})",
-                    effectiveSaveTimeoutMinutes,
-                    retryCount + 1,
-                    maxRetries + 1);
+                    "Deadlock detected during SaveChanges. Retrying in {DelaySeconds}s (Attempt {Attempt}/{MaxAttempts}). Error: {ErrorMessage}",
+                    args.RetryDelay.TotalSeconds,
+                    args.AttemptNumber + 2,
+                    maxRetries + 1,
+                    args.Outcome.Exception?.Message);
+                return ValueTask.CompletedTask;
+            }
+        };
 
-                if (retryCount == 0)
-                {
-                    saveChangesCallback?.Invoke();
-                }
+        var savePipeline = new ResiliencePipelineBuilder()
+            .AddRetry(saveRetryOptions)
+            .Build();
 
-                saveTimeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(effectiveSaveTimeoutMinutes));
-                using var combinedSaveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, saveTimeoutCts.Token);
+        try
+        {
+            _logger.LogInformation(
+                "Saving model changes with timeout of {TimeoutMinutes} minutes and max parallelism {MaxParallelism}.",
+                effectiveSaveTimeoutMinutes,
+                maxParallelism);
+            saveChangesCallback?.Invoke();
 
+            saveTimeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(effectiveSaveTimeoutMinutes));
+            using var combinedSaveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, saveTimeoutCts.Token);
+
+            await savePipeline.ExecuteAsync(async token =>
+            {
                 await Task.Run(() =>
                 {
-                    combinedSaveCts.Token.ThrowIfCancellationRequested();
-                    model.SaveChanges();
-                }, combinedSaveCts.Token);
+                    token.ThrowIfCancellationRequested();
+                    model.SaveChanges(new SaveOptions { MaxParallelism = maxParallelism });
+                }, token);
+            }, combinedSaveCts.Token);
 
-                _logger.LogInformation("SaveChanges() completed successfully.");
-                saveChangesCompleted = true;
-                break;
-            }
-            catch (Exception ex) when (IsDeadlockException(ex) && retryCount < maxRetries)
+            _logger.LogInformation("SaveChanges() completed successfully.");
+            saveChangesCompleted = true;
+        }
+        catch (OperationCanceledException)
+        {
+            if (cancellationToken.IsCancellationRequested)
             {
-                retryCount++;
-                var delayMs = baseDelayMs * (int)Math.Pow(2, retryCount - 1);
-                _logger.LogWarning(
-                    ex,
-                    "Deadlock detected during SaveChanges. Retrying in {DelayMs}ms (Attempt {Attempt}/{MaxAttempts}). Error: {ErrorMessage}",
-                    delayMs,
-                    retryCount + 1,
-                    maxRetries + 1,
-                    ex.Message);
-
-                await Task.Delay(delayMs, cancellationToken);
-                saveTimeoutCts?.Dispose();
-                saveTimeoutCts = null;
+                saveFailureMessage = "Operation canceled or timed out before SaveChanges finished.";
+                _logger.LogError(saveFailureMessage);
             }
-            catch (OperationCanceledException)
+            else if (saveTimeoutCts?.Token.IsCancellationRequested == true)
             {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    saveFailureMessage = "Operation canceled or timed out before SaveChanges finished.";
-                    _logger.LogError(saveFailureMessage);
-                }
-                else if (saveTimeoutCts?.Token.IsCancellationRequested == true)
-                {
-                    saveFailureMessage = $"SaveChanges operation timed out after {effectiveSaveTimeoutMinutes} minutes.";
-                    _logger.LogError(saveFailureMessage);
-                }
-                else
-                {
-                    saveFailureMessage = "SaveChanges was canceled.";
-                    _logger.LogError(saveFailureMessage);
-                }
-
-                break;
+                saveFailureMessage = $"SaveChanges operation timed out after {effectiveSaveTimeoutMinutes} minutes.";
+                _logger.LogError(saveFailureMessage);
             }
-            catch (Exception ex)
+            else
             {
-                if (IsDeadlockException(ex))
-                {
-                    saveFailureMessage = "SaveChanges failed after multiple retry attempts due to persistent deadlocks.";
-                    _logger.LogError(ex, saveFailureMessage);
-                }
-                else
-                {
-                    saveFailureMessage = $"SaveChanges failed: {ex.Message}";
-                    _logger.LogError(ex, "Error saving changes: {ErrorMessage}", ex.Message);
-                }
-
-                break;
+                saveFailureMessage = "SaveChanges was canceled.";
+                _logger.LogError(saveFailureMessage);
             }
-            finally
+        }
+        catch (Exception ex)
+        {
+            if (IsDeadlockException(ex))
             {
-                saveTimeoutCts?.Dispose();
-                saveTimeoutCts = null;
+                saveFailureMessage = "SaveChanges failed after multiple retry attempts due to persistent deadlocks.";
+                _logger.LogError(ex, saveFailureMessage);
             }
+            else
+            {
+                saveFailureMessage = $"SaveChanges failed: {ex.Message}";
+                _logger.LogError(ex, "Error saving changes: {ErrorMessage}", ex.Message);
+            }
+        }
+        finally
+        {
+            saveTimeoutCts?.Dispose();
         }
 
         if (!saveChangesCompleted)
