@@ -50,6 +50,11 @@
     "slotSetting": false
   },
   {
+    "name": "AAS_SCALE_UP_SKU",
+    "value": "S9v2",
+    "slotSetting": false
+  },
+  {
     "name": "ENABLE_AAS_AUTO_SCALING",
     "value": "false",
     "slotSetting": false

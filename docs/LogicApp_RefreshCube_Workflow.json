@@ -494,6 +494,7 @@
             "Scale_Up": {
                 "type": "Function",
                 "inputs": {
+                    "body": {},
                     "method": "POST",
                     "headers": {
                         "Content-Type": "application/json"
@@ -511,6 +512,7 @@
             "Scale_Down": {
                 "type": "Function",
                 "inputs": {
+                    "body": {},
                     "method": "POST",
                     "headers": {
                         "Content-Type": "application/json"
