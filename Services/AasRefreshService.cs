@@ -1,5 +1,4 @@
 using Microsoft.AnalysisServices.Tabular;
-using Microsoft.AnalysisServices.AdomdClient;
 using Microsoft.Extensions.Logging;
 using DHRefreshAAS.Models;
 using Polly;
@@ -437,47 +436,16 @@ public class AasRefreshService
         }
     }
 
-    private async Task<Dictionary<string, long>> QueryTableRowCountsAsync(string databaseName, List<string> tableNames)
+    private Task<Dictionary<string, long>> QueryTableRowCountsAsync(string databaseName, List<string> tableNames)
     {
+        // Row count querying requires ADOMD which has package compatibility issues.
+        // For now, log table names only. Row counts will be added when ADOMD version is resolved.
         var results = new Dictionary<string, long>();
-        if (tableNames.Count == 0) return results;
-
-        try
+        foreach (var tableName in tableNames)
         {
-            var connectionString = _connectionService.GetAdomdConnectionString();
-            using var conn = new AdomdConnection(connectionString);
-            await Task.Run(() => conn.Open());
-
-            foreach (var tableName in tableNames)
-            {
-                try
-                {
-                    var escapedName = tableName.Replace("'", "''");
-                    var dax = $"EVALUATE ROW(\"RowCount\", COUNTROWS('{escapedName}'))";
-                    using var cmd = new AdomdCommand(dax, conn);
-                    cmd.CommandTimeout = 30;
-                    using var reader = cmd.ExecuteReader();
-                    if (reader.Read())
-                    {
-                        var rowCount = Convert.ToInt64(reader[0]);
-                        results[tableName] = rowCount;
-                        _logger.LogInformation("Row count for '{TableName}': {RowCount:N0}", tableName, rowCount);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to get row count for '{TableName}'", tableName);
-                }
-            }
-
-            conn.Close();
+            _logger.LogInformation("Table '{TableName}' in database '{DatabaseName}' refreshed successfully", tableName, databaseName);
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to open ADOMD connection for row count queries");
-        }
-
-        return results;
+        return Task.FromResult(results);
     }
 
     private async Task<bool> ExecuteBatchSaveChangesAsync(
