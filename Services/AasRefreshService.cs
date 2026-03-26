@@ -137,6 +137,22 @@ public class AasRefreshService
             .AddRetry(retryOptions)
             .Build();
 
+        // Auto-scale AAS BEFORE connecting (scaling restarts the server, which kills existing connections)
+        var scaledUp = false;
+        _logger.LogInformation("AAS auto-scaling enabled: {Enabled}", _config.EnableAasAutoScaling);
+        if (_config.EnableAasAutoScaling)
+        {
+            try
+            {
+                scaledUp = await _scalingService.ScaleUpAsync(cancellationToken);
+                _logger.LogInformation("AAS scale-up result: {ScaledUp}", scaledUp);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "AAS auto-scale up failed, continuing with current SKU");
+            }
+        }
+
         try
         {
             await pipeline.ExecuteAsync(async token =>
@@ -178,6 +194,21 @@ public class AasRefreshService
         finally
         {
             await _connectionService.SafeDisconnectAsync(asSrv);
+
+            // ALWAYS scale down - even if refresh fails, crashes, or times out
+            if (scaledUp)
+            {
+                try
+                {
+                    await _scalingService.ScaleDownAsync(CancellationToken.None);
+                }
+                catch (Exception scaleEx)
+                {
+                    _logger.LogCritical(scaleEx,
+                        "CRITICAL: Failed to scale AAS back to {OriginalSku}! Manual intervention required to avoid cost overrun.",
+                        _config.AasOriginalSku);
+                }
+            }
         }
     }
 
@@ -289,24 +320,6 @@ public class AasRefreshService
             "Processing {TotalObjects} refresh objects in {BatchCount} batches (batch size: {BatchSize}, max parallelism: {MaxParallelism})",
             validObjects.Count, batches.Count, batchSize, maxParallelism);
 
-        // Auto-scale AAS before processing batches
-        var scaledUp = false;
-        _logger.LogInformation("AAS auto-scaling enabled: {Enabled}", _config.EnableAasAutoScaling);
-        try
-        {
-        if (_config.EnableAasAutoScaling)
-        {
-            try
-            {
-                scaledUp = await _scalingService.ScaleUpAsync(cancellationToken);
-                _logger.LogInformation("AAS scale-up result: {ScaledUp}", scaledUp);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "AAS auto-scale up failed, continuing with current SKU");
-            }
-        }
-
         var batchIndex = 0;
         foreach (var batch in batches)
         {
@@ -415,25 +428,6 @@ public class AasRefreshService
 
                 response.RefreshResults.Add(result);
                 progressCallback?.Invoke(result.TableName, result.IsSuccess, result.ErrorMessage);
-            }
-        }
-
-        } // end try
-        finally
-        {
-            // ALWAYS scale down - even if refresh fails, crashes, or times out
-            if (scaledUp)
-            {
-                try
-                {
-                    await _scalingService.ScaleDownAsync(CancellationToken.None); // Don't use cancellationToken - must complete
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogCritical(ex,
-                        "CRITICAL: Failed to scale AAS back to {OriginalSku}! Manual intervention required to avoid cost overrun.",
-                        _config.AasOriginalSku);
-                }
             }
         }
     }
