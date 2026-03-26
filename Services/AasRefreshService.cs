@@ -291,6 +291,7 @@ public class AasRefreshService
 
         // Auto-scale AAS before processing batches
         var scaledUp = false;
+        _logger.LogInformation("AAS auto-scaling enabled: {Enabled}", _config.EnableAasAutoScaling);
         try
         {
         if (_config.EnableAasAutoScaling)
@@ -298,6 +299,7 @@ public class AasRefreshService
             try
             {
                 scaledUp = await _scalingService.ScaleUpAsync(cancellationToken);
+                _logger.LogInformation("AAS scale-up result: {ScaledUp}", scaledUp);
             }
             catch (Exception ex)
             {

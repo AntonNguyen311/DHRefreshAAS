@@ -26,7 +26,11 @@ public class AasScalingService
     public virtual async Task<bool> ScaleUpAsync(CancellationToken cancellationToken = default)
     {
         var targetSku = _config.AasScaleUpSku;
-        _logger.LogInformation("Scaling AAS up to {TargetSku}...", targetSku);
+        _logger.LogInformation(
+            "AAS auto-scaling initiated. Target SKU: {TargetSku}, Server: {ServerName}, ResourceGroup: {ResourceGroup}, Subscription: {SubscriptionId}, TenantId: {TenantId}, ClientId: {ClientId}",
+            targetSku, _config.AasServerName, _config.AasResourceGroup, _config.AasSubscriptionId,
+            string.IsNullOrEmpty(_config.AasTenantId) ? "(EMPTY)" : _config.AasTenantId[..Math.Min(8, _config.AasTenantId.Length)] + "...",
+            string.IsNullOrEmpty(_config.AasUserId) ? "(EMPTY)" : _config.AasUserId[..Math.Min(8, _config.AasUserId.Length)] + "...");
         return await ScaleToSkuAsync(targetSku, cancellationToken);
     }
 
