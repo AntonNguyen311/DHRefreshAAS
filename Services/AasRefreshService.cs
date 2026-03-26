@@ -202,6 +202,13 @@ public class AasRefreshService
             {
                 response.Message = "Some table/partition refreshes failed. See RefreshResults.";
             }
+
+            // Build top slow tables list (top 10 by processing time)
+            response.TopSlowTables = response.RefreshResults
+                .Where(r => r.ProcessingTimeSeconds.HasValue && r.ProcessingTimeSeconds > 0)
+                .OrderByDescending(r => r.ProcessingTimeSeconds)
+                .Take(10)
+                .ToList();
         }
         catch (Exception ex)
         {
@@ -408,6 +415,7 @@ public class AasRefreshService
             }
 
             saveChangesCallback?.Invoke();
+            var saveChangesStartTime = DateTime.UtcNow;
             var saveSuccess = await ExecuteBatchSaveChangesAsync(
                 model, maxParallelism, effectiveSaveTimeoutMinutes, batchIndex, batches.Count, cancellationToken);
 
@@ -445,7 +453,7 @@ public class AasRefreshService
                     {
                         result.RowCount = count;
                     }
-                    // Get RefreshedTime from TOM
+                    // Get RefreshedTime from TOM and calculate processing time
                     var tbl = model.Tables.Find(refreshObj.Table);
                     if (tbl != null)
                     {
@@ -453,11 +461,16 @@ public class AasRefreshService
                             ? tbl.Partitions.FirstOrDefault()
                             : (tbl.Partitions.ContainsName(refreshObj.Partition) ? tbl.Partitions[refreshObj.Partition] : null);
                         result.RefreshedTime = partition?.RefreshedTime;
+                        if (result.RefreshedTime.HasValue)
+                        {
+                            result.ProcessingTimeSeconds = (result.RefreshedTime.Value - saveChangesStartTime).TotalSeconds;
+                            if (result.ProcessingTimeSeconds < 0) result.ProcessingTimeSeconds = 0;
+                        }
                     }
 
                     _logger.LogInformation(
-                        "Table '{TableName}' partition '{PartitionName}' refreshed — RowCount: {RowCount:N0}, RefreshedTime: {RefreshedTime}",
-                        result.TableName, result.PartitionName, result.RowCount ?? -1, result.RefreshedTime);
+                        "Table '{TableName}' partition '{PartitionName}' refreshed — RowCount: {RowCount:N0}, ProcessingTime: {ProcessingTime:F1}s, RefreshedTime: {RefreshedTime}",
+                        result.TableName, result.PartitionName, result.RowCount ?? -1, result.ProcessingTimeSeconds ?? 0, result.RefreshedTime);
                 }
 
                 response.RefreshResults.Add(result);

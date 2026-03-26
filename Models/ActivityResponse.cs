@@ -27,4 +27,7 @@ public class ActivityResponse
     
     [JsonPropertyName("executionTimeSeconds")]
     public double ExecutionTimeSeconds { get; set; }
+
+    [JsonPropertyName("topSlowTables")]
+    public List<RefreshResult>? TopSlowTables { get; set; }
 }

@@ -51,12 +51,12 @@
   },
   {
     "name": "ENABLE_AAS_AUTO_SCALING",
-    "value": "true",
+    "value": "false",
     "slotSetting": false
   },
   {
     "name": "ENABLE_ELASTIC_POOL_AUTO_SCALING",
-    "value": "true",
+    "value": "false",
     "slotSetting": false
   },
   {

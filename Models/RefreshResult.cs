@@ -33,4 +33,7 @@ public class RefreshResult
 
     [JsonPropertyName("refreshedTime")]
     public DateTime? RefreshedTime { get; set; }
+
+    [JsonPropertyName("processingTimeSeconds")]
+    public double? ProcessingTimeSeconds { get; set; }
 }

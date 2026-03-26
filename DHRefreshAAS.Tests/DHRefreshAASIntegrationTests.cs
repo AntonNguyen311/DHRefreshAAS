@@ -19,6 +19,8 @@ public class DHRefreshAASIntegrationTests
     private readonly Mock<ConfigurationService> _mockConfig;
     private readonly Mock<ConnectionService> _mockConnectionService;
     private readonly Mock<AasRefreshService> _mockAasRefreshService;
+    private readonly Mock<AasScalingService> _mockScalingService;
+    private readonly Mock<ElasticPoolScalingService> _mockElasticPoolScalingService;
     private readonly Mock<OperationStorageService> _mockOperationStorage;
     private readonly Mock<ProgressTrackingService> _mockProgressTracking;
     private readonly Mock<ErrorHandlingService> _mockErrorHandling;
@@ -34,6 +36,8 @@ public class DHRefreshAASIntegrationTests
         _mockConfig = new Mock<ConfigurationService>(Mock.Of<IConfiguration>(), Mock.Of<ILogger<ConfigurationService>>());
         _mockConnectionService = new Mock<ConnectionService>(_mockConfig.Object, Mock.Of<ILogger<ConnectionService>>());
         _mockAasRefreshService = new Mock<AasRefreshService>(_mockConfig.Object, _mockConnectionService.Object, new Mock<AasScalingService>(_mockConfig.Object, Mock.Of<ILogger<AasScalingService>>()).Object, new Mock<ElasticPoolScalingService>(_mockConfig.Object, Mock.Of<ILogger<ElasticPoolScalingService>>()).Object, Mock.Of<ILogger<AasRefreshService>>());
+        _mockScalingService = new Mock<AasScalingService>(_mockConfig.Object, Mock.Of<ILogger<AasScalingService>>());
+        _mockElasticPoolScalingService = new Mock<ElasticPoolScalingService>(_mockConfig.Object, Mock.Of<ILogger<ElasticPoolScalingService>>());
         _mockOperationStorage = new Mock<OperationStorageService>(Mock.Of<ILogger<OperationStorageService>>());
         _mockProgressTracking = new Mock<ProgressTrackingService>(Mock.Of<ILogger<ProgressTrackingService>>());
         _mockErrorHandling = new Mock<ErrorHandlingService>(Mock.Of<ILogger<ErrorHandlingService>>());
@@ -48,6 +52,8 @@ public class DHRefreshAASIntegrationTests
             _mockConfig.Object,
             _mockConnectionService.Object,
             _mockAasRefreshService.Object,
+            _mockScalingService.Object,
+            _mockElasticPoolScalingService.Object,
             _mockOperationStorage.Object,
             _mockProgressTracking.Object,
             _mockErrorHandling.Object,

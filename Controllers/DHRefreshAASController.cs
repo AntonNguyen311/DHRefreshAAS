@@ -21,6 +21,8 @@ public class DHRefreshAASController
     private readonly ConfigurationService _config;
     private readonly ConnectionService _connectionService;
     private readonly AasRefreshService _aasRefreshService;
+    private readonly AasScalingService _scalingService;
+    private readonly ElasticPoolScalingService _elasticPoolScalingService;
     private readonly OperationStorageService _operationStorage;
     private readonly ProgressTrackingService _progressTracking;
     private readonly ErrorHandlingService _errorHandling;
@@ -34,6 +36,8 @@ public class DHRefreshAASController
         ConfigurationService config,
         ConnectionService connectionService,
         AasRefreshService aasRefreshService,
+        AasScalingService scalingService,
+        ElasticPoolScalingService elasticPoolScalingService,
         OperationStorageService operationStorage,
         ProgressTrackingService progressTracking,
         ErrorHandlingService errorHandling,
@@ -46,6 +50,8 @@ public class DHRefreshAASController
         _config = config;
         _connectionService = connectionService;
         _aasRefreshService = aasRefreshService;
+        _scalingService = scalingService;
+        _elasticPoolScalingService = elasticPoolScalingService;
         _operationStorage = operationStorage;
         _progressTracking = progressTracking;
         _errorHandling = errorHandling;
@@ -163,6 +169,110 @@ public class DHRefreshAASController
         catch (Exception ex)
         {
             return await _errorHandling.HandleExceptionAsync(req, ex, "status check");
+        }
+    }
+
+    /// <summary>
+    /// Scale up AAS and Elastic Pool before parallel refresh.
+    /// Called by Logic App before For_each loop.
+    /// </summary>
+    [Function("DHRefreshAAS_ScaleUp")]
+    public async Task<HttpResponseData> ScaleUp(
+        [HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequestData req,
+        FunctionContext context)
+    {
+        var logger = context.GetLogger<DHRefreshAASController>();
+        logger.LogInformation("Scale-up requested by orchestrator");
+
+        var aasScaledUp = false;
+        var elasticPoolScaledUp = false;
+
+        try
+        {
+            // Scale Elastic Pool first (SQL needs capacity before AAS reads from it)
+            try
+            {
+                elasticPoolScaledUp = await _elasticPoolScalingService.ScaleUpAsync(CancellationToken.None);
+                logger.LogInformation("Elastic Pool scale-up result: {ScaledUp}", elasticPoolScaledUp);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Elastic Pool scale-up failed");
+            }
+
+            // Scale AAS (scaling restarts the server)
+            try
+            {
+                aasScaledUp = await _scalingService.ScaleUpAsync(CancellationToken.None);
+                logger.LogInformation("AAS scale-up result: {ScaledUp}", aasScaledUp);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "AAS scale-up failed");
+            }
+
+            return await _responseService.CreateSuccessResponseAsync(req, new
+            {
+                aasScaledUp,
+                elasticPoolScaledUp
+            }, HttpStatusCode.OK);
+        }
+        catch (Exception ex)
+        {
+            return await _errorHandling.HandleExceptionAsync(req, ex, "scale-up");
+        }
+    }
+
+    /// <summary>
+    /// Scale down AAS and Elastic Pool after all refreshes complete.
+    /// Called by Logic App after For_each loop.
+    /// </summary>
+    [Function("DHRefreshAAS_ScaleDown")]
+    public async Task<HttpResponseData> ScaleDown(
+        [HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequestData req,
+        FunctionContext context)
+    {
+        var logger = context.GetLogger<DHRefreshAASController>();
+        logger.LogInformation("Scale-down requested by orchestrator");
+
+        var aasScaledDown = false;
+        var elasticPoolScaledDown = false;
+
+        try
+        {
+            // Scale AAS down first
+            try
+            {
+                await _scalingService.ScaleDownAsync(CancellationToken.None);
+                aasScaledDown = true;
+                logger.LogInformation("AAS scale-down completed");
+            }
+            catch (Exception ex)
+            {
+                logger.LogCritical(ex, "CRITICAL: AAS scale-down failed! Manual intervention required.");
+            }
+
+            // Scale Elastic Pool down
+            try
+            {
+                await _elasticPoolScalingService.ScaleDownAsync(CancellationToken.None);
+                elasticPoolScaledDown = true;
+                logger.LogInformation("Elastic Pool scale-down completed");
+            }
+            catch (Exception ex)
+            {
+                logger.LogCritical(ex, "CRITICAL: Elastic Pool scale-down failed! Manual intervention required.");
+            }
+
+            return await _responseService.CreateSuccessResponseAsync(req, new
+            {
+                aasScaledDown,
+                elasticPoolScaledDown
+            }, HttpStatusCode.OK);
+        }
+        catch (Exception ex)
+        {
+            return await _errorHandling.HandleExceptionAsync(req, ex, "scale-down");
         }
     }
 
@@ -329,6 +439,7 @@ public class DHRefreshAASController
                 },
                 
                 result = operation.Result,
+                topSlowTables = ParseTopSlowTables(operation.Result),
                 errorMessage = operation.ErrorMessage,
                 isCompleted = operation.Status != OperationStatusEnum.Running
             };
@@ -382,6 +493,34 @@ public class DHRefreshAASController
         };
         
         return await _responseService.CreateStatusResponseAsync(req, statusData);
+    }
+
+    private static object[]? ParseTopSlowTables(string? resultJson)
+    {
+        if (string.IsNullOrWhiteSpace(resultJson)) return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(resultJson);
+            if (!doc.RootElement.TryGetProperty("topSlowTables", out var slowTables))
+                return null;
+
+            var list = new List<object>();
+            foreach (var item in slowTables.EnumerateArray())
+            {
+                list.Add(new
+                {
+                    tableName = item.TryGetProperty("tableName", out var tn) ? tn.GetString() ?? "" : "",
+                    partitionName = item.TryGetProperty("partitionName", out var p) ? p.GetString() ?? "" : "",
+                    processingTimeSeconds = item.TryGetProperty("processingTimeSeconds", out var t) ? Math.Round(t.GetDouble(), 1) : 0,
+                    rowCount = item.TryGetProperty("rowCount", out var r) && r.ValueKind != System.Text.Json.JsonValueKind.Null ? r.GetInt64() : (long?)null
+                });
+            }
+            return list.Count > 0 ? list.ToArray() : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
     }
 
     #endregion
