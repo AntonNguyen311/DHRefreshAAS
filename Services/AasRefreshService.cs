@@ -1,4 +1,5 @@
 using Microsoft.AnalysisServices.Tabular;
+using Microsoft.AnalysisServices.AdomdClient;
 using Microsoft.Extensions.Logging;
 using DHRefreshAAS.Models;
 using Polly;
@@ -342,9 +343,17 @@ public class AasRefreshService
             var saveSuccess = await ExecuteBatchSaveChangesAsync(
                 model, maxParallelism, effectiveSaveTimeoutMinutes, batchIndex, batches.Count, cancellationToken);
 
+            // Query row counts after SaveChanges
+            Dictionary<string, long>? rowCounts = null;
             if (saveSuccess)
             {
                 _logger.LogInformation("Batch {BatchIndex}/{BatchCount} SaveChanges completed successfully", batchIndex, batches.Count);
+                var tableNames = batch
+                    .Where(b => b.result.IsSuccess)
+                    .Select(b => b.refreshObj.Table!)
+                    .Distinct()
+                    .ToList();
+                rowCounts = await QueryTableRowCountsAsync(requestData.DatabaseName, tableNames);
             }
             else
             {
@@ -352,17 +361,84 @@ public class AasRefreshService
             }
 
             // Update results for this batch
-            foreach (var (_, result) in batch)
+            foreach (var (refreshObj, result) in batch)
             {
                 if (!saveSuccess && result.IsSuccess)
                 {
                     result.IsSuccess = false;
                     result.ErrorMessage = $"SaveChanges failed for batch {batchIndex}";
                 }
+
+                // Add row count and partition info
+                if (saveSuccess && result.IsSuccess && rowCounts != null)
+                {
+                    var key = string.IsNullOrEmpty(refreshObj.Partition) ? refreshObj.Table! : $"{refreshObj.Table}|{refreshObj.Partition}";
+                    if (rowCounts.TryGetValue(refreshObj.Table!, out var count))
+                    {
+                        result.RowCount = count;
+                    }
+                    // Get RefreshedTime from TOM
+                    var tbl = model.Tables.Find(refreshObj.Table);
+                    if (tbl != null)
+                    {
+                        var partition = string.IsNullOrEmpty(refreshObj.Partition)
+                            ? tbl.Partitions.FirstOrDefault()
+                            : (tbl.Partitions.ContainsName(refreshObj.Partition) ? tbl.Partitions[refreshObj.Partition] : null);
+                        result.RefreshedTime = partition?.RefreshedTime;
+                    }
+
+                    _logger.LogInformation(
+                        "Table '{TableName}' partition '{PartitionName}' refreshed — RowCount: {RowCount:N0}, RefreshedTime: {RefreshedTime}",
+                        result.TableName, result.PartitionName, result.RowCount ?? -1, result.RefreshedTime);
+                }
+
                 response.RefreshResults.Add(result);
                 progressCallback?.Invoke(result.TableName, result.IsSuccess, result.ErrorMessage);
             }
         }
+    }
+
+    private async Task<Dictionary<string, long>> QueryTableRowCountsAsync(string databaseName, List<string> tableNames)
+    {
+        var results = new Dictionary<string, long>();
+        if (tableNames.Count == 0) return results;
+
+        try
+        {
+            var connectionString = _connectionService.GetAdomdConnectionString();
+            using var conn = new AdomdConnection(connectionString);
+            await Task.Run(() => conn.Open());
+
+            foreach (var tableName in tableNames)
+            {
+                try
+                {
+                    var escapedName = tableName.Replace("'", "''");
+                    var dax = $"EVALUATE ROW(\"RowCount\", COUNTROWS('{escapedName}'))";
+                    using var cmd = new AdomdCommand(dax, conn);
+                    cmd.CommandTimeout = 30;
+                    using var reader = cmd.ExecuteReader();
+                    if (reader.Read())
+                    {
+                        var rowCount = Convert.ToInt64(reader[0]);
+                        results[tableName] = rowCount;
+                        _logger.LogInformation("Row count for '{TableName}': {RowCount:N0}", tableName, rowCount);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to get row count for '{TableName}'", tableName);
+                }
+            }
+
+            conn.Close();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to open ADOMD connection for row count queries");
+        }
+
+        return results;
     }
 
     private async Task<bool> ExecuteBatchSaveChangesAsync(

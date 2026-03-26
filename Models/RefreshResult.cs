@@ -27,4 +27,10 @@ public class RefreshResult
     
     [JsonPropertyName("executionTimeSeconds")]
     public double ExecutionTimeSeconds { get; set; }
+
+    [JsonPropertyName("rowCount")]
+    public long? RowCount { get; set; }
+
+    [JsonPropertyName("refreshedTime")]
+    public DateTime? RefreshedTime { get; set; }
 }

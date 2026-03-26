@@ -134,6 +134,14 @@ public class ConnectionService
     }
 
     /// <summary>
+    /// Get connection string for ADOMD queries (e.g. row count after refresh)
+    /// </summary>
+    public string GetAdomdConnectionString(int connectTimeoutSeconds = 60, int commandTimeoutSeconds = 120)
+    {
+        return BuildConnectionString(connectTimeoutSeconds, commandTimeoutSeconds);
+    }
+
+    /// <summary>
     /// Test Azure AD token acquisition for Service Principal
     /// </summary>
     public virtual async Task<TokenTestResult> TestTokenAcquisitionAsync(CancellationToken cancellationToken)
