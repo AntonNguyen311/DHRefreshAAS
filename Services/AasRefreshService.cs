@@ -197,16 +197,6 @@ public class AasRefreshService
                     saveChangesCallback);
             }, cancellationToken);
 
-            response.IsSuccess = !response.RefreshResults.Exists(r => !r.IsSuccess);
-            if (response.IsSuccess)
-            {
-                response.Message = "Successfully refreshed all specified tables/partitions.";
-            }
-            else if (string.IsNullOrWhiteSpace(response.Message))
-            {
-                response.Message = "Some table/partition refreshes failed. See RefreshResults.";
-            }
-
             // Build top slow tables list (top 10 by processing time)
             response.TopSlowTables = response.RefreshResults
                 .Where(r => r.ProcessingTimeSeconds.HasValue && r.ProcessingTimeSeconds > 0)
@@ -503,6 +493,7 @@ public class AasRefreshService
 
         // Recalculate the model once after all DataOnly batches complete
         var anySuccess = response.RefreshResults.Any(r => r.IsSuccess);
+        var calculateSuccess = false;
         if (anySuccess)
         {
             _logger.LogInformation("All DataOnly batches complete. Starting model Calculate for database '{Database}'...",
@@ -511,7 +502,7 @@ public class AasRefreshService
             try
             {
                 model.RequestRefresh(RefreshType.Calculate);
-                var calculateSuccess = await ExecuteBatchSaveChangesAsync(model, maxParallelism, effectiveSaveTimeoutMinutes,
+                calculateSuccess = await ExecuteBatchSaveChangesAsync(model, maxParallelism, effectiveSaveTimeoutMinutes,
                     batches.Count + 1, batches.Count + 1, cancellationToken);
                 if (calculateSuccess)
                 {
@@ -520,21 +511,36 @@ public class AasRefreshService
                 else
                 {
                     _logger.LogError("Model Calculate SaveChanges failed for database '{Database}'", requestData.DatabaseName);
-                    response.IsSuccess = false;
-                    response.Message = "Data refresh succeeded but Calculate failed. Model may show 'needs to be recalculated'.";
                 }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Model Calculate failed for database '{Database}': {Error}",
                     requestData.DatabaseName, ex.Message);
-                response.IsSuccess = false;
-                response.Message = $"Data refresh succeeded but Calculate failed: {ex.Message}";
             }
             finally
             {
                 dbSemaphore.Release();
             }
+        }
+
+        // Set final response status: all DataOnly results must succeed AND Calculate must succeed
+        var allDataSuccess = !response.RefreshResults.Exists(r => !r.IsSuccess);
+        if (allDataSuccess && calculateSuccess)
+        {
+            response.IsSuccess = true;
+            response.Message = "Successfully refreshed all specified tables/partitions.";
+        }
+        else if (allDataSuccess && !calculateSuccess && anySuccess)
+        {
+            response.IsSuccess = false;
+            response.Message = "Data refresh succeeded but Calculate failed. Model may show 'needs to be recalculated'.";
+        }
+        else if (!allDataSuccess)
+        {
+            response.IsSuccess = false;
+            if (string.IsNullOrWhiteSpace(response.Message))
+                response.Message = "Some table/partition refreshes failed. See RefreshResults.";
         }
     }
 
@@ -613,16 +619,6 @@ public class AasRefreshService
         {
             _logger.LogError(ex, "Batch {BatchIndex} SaveChanges failed: {ErrorMessage}", batchIndex, ex.Message);
             return false;
-        }
-    }
-
-    private static void ApplySaveFailureToResponse(ActivityResponse response, string errorMessage)
-    {
-        response.Message = errorMessage;
-        foreach (var result in response.RefreshResults.Where(r => r.IsSuccess))
-        {
-            result.IsSuccess = false;
-            result.ErrorMessage = errorMessage;
         }
     }
 
