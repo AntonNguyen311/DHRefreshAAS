@@ -15,6 +15,7 @@ public class AasRefreshService
     private readonly ConnectionService _connectionService;
     private readonly AasScalingService _scalingService;
     private readonly ElasticPoolScalingService _elasticPoolScalingService;
+    private readonly RefreshConcurrencyService _concurrencyService;
     private readonly ILogger<AasRefreshService> _logger;
 
     public AasRefreshService(
@@ -22,17 +23,20 @@ public class AasRefreshService
         ConnectionService connectionService,
         AasScalingService scalingService,
         ElasticPoolScalingService elasticPoolScalingService,
+        RefreshConcurrencyService concurrencyService,
         ILogger<AasRefreshService> logger)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(connectionService);
         ArgumentNullException.ThrowIfNull(scalingService);
         ArgumentNullException.ThrowIfNull(elasticPoolScalingService);
+        ArgumentNullException.ThrowIfNull(concurrencyService);
         ArgumentNullException.ThrowIfNull(logger);
         _config = config;
         _connectionService = connectionService;
         _scalingService = scalingService;
         _elasticPoolScalingService = elasticPoolScalingService;
+        _concurrencyService = concurrencyService;
         _logger = logger;
     }
 
@@ -361,6 +365,9 @@ public class AasRefreshService
             "Processing {TotalObjects} refresh objects in {BatchCount} batches (batch size: {BatchSize}, max parallelism: {MaxParallelism})",
             validObjects.Count, batches.Count, batchSize, maxParallelism);
 
+        // Get per-database semaphore to prevent concurrent SaveChanges on the same AAS database
+        var dbSemaphore = _concurrencyService.GetDatabaseSemaphore(requestData.DatabaseName);
+
         var batchIndex = 0;
         foreach (var batch in batches)
         {
@@ -414,10 +421,26 @@ public class AasRefreshService
                 continue;
             }
 
-            saveChangesCallback?.Invoke();
+            // Acquire per-database lock to prevent concurrent SaveChanges on the same AAS database
+            _logger.LogInformation("Waiting for database lock on '{Database}' for batch {BatchIndex}...",
+                requestData.DatabaseName, batchIndex);
+            await dbSemaphore.WaitAsync(cancellationToken);
+            bool saveSuccess;
             var saveChangesStartTime = DateTime.UtcNow;
-            var saveSuccess = await ExecuteBatchSaveChangesAsync(
-                model, maxParallelism, effectiveSaveTimeoutMinutes, batchIndex, batches.Count, cancellationToken);
+            try
+            {
+                _logger.LogInformation("Acquired database lock on '{Database}' for batch {BatchIndex}",
+                    requestData.DatabaseName, batchIndex);
+                saveChangesCallback?.Invoke();
+                saveSuccess = await ExecuteBatchSaveChangesAsync(
+                    model, maxParallelism, effectiveSaveTimeoutMinutes, batchIndex, batches.Count, cancellationToken);
+            }
+            finally
+            {
+                dbSemaphore.Release();
+                _logger.LogInformation("Released database lock on '{Database}' for batch {BatchIndex}",
+                    requestData.DatabaseName, batchIndex);
+            }
 
             // Query row counts after SaveChanges
             Dictionary<string, long>? rowCounts = null;

@@ -126,7 +126,7 @@
   },
   {
     "name": "ZOMBIE_TIMEOUT_MINUTES",
-    "value": "30",
+    "value": "120",
     "slotSetting": false
   }
 ]
