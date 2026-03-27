@@ -374,16 +374,18 @@ public class AasRefreshService
                 try
                 {
                     var table = model.Tables.Find(refreshObj.Table)!;
+                    var tomRefreshType = refreshObj.IsFullRefresh ? RefreshType.Full : RefreshType.DataOnly;
                     if (string.IsNullOrEmpty(refreshObj.Partition))
                     {
-                        _logger.LogInformation("Requesting refresh for table '{TableName}'", refreshObj.Table);
-                        table.RequestRefresh(RefreshType.DataOnly);
+                        _logger.LogInformation("Requesting {RefreshType} refresh for table '{TableName}'",
+                            tomRefreshType, refreshObj.Table);
+                        table.RequestRefresh(tomRefreshType);
                     }
                     else
                     {
-                        _logger.LogInformation("Requesting refresh for partition '{PartitionName}' in table '{TableName}'",
-                            refreshObj.Partition, refreshObj.Table);
-                        table.Partitions[refreshObj.Partition].RequestRefresh(RefreshType.DataOnly);
+                        _logger.LogInformation("Requesting {RefreshType} refresh for partition '{PartitionName}' in table '{TableName}'",
+                            tomRefreshType, refreshObj.Partition, refreshObj.Table);
+                        table.Partitions[refreshObj.Partition].RequestRefresh(tomRefreshType);
                     }
                     result.IsSuccess = true;
                 }
@@ -491,12 +493,15 @@ public class AasRefreshService
             }
         }
 
-        // Recalculate the model once after all DataOnly batches complete
+        // Recalculate the model if any DataOnly tables were refreshed successfully
+        // (Full tables already include calculate, so no extra step needed for those)
         var anySuccess = response.RefreshResults.Any(r => r.IsSuccess);
-        var calculateSuccess = false;
-        if (anySuccess)
+        var hasDataOnlyTables = validObjects.Any(v => !v.refreshObj.IsFullRefresh &&
+            response.RefreshResults.Any(r => r.IsSuccess && r.TableName == v.refreshObj.Table));
+        var calculateSuccess = !hasDataOnlyTables; // true if no DataOnly tables (nothing to calculate)
+        if (hasDataOnlyTables)
         {
-            _logger.LogInformation("All DataOnly batches complete. Starting model Calculate for database '{Database}'...",
+            _logger.LogInformation("DataOnly batches complete. Starting model Calculate for database '{Database}'...",
                 requestData.DatabaseName);
             await dbSemaphore.WaitAsync(cancellationToken);
             try
@@ -523,15 +528,20 @@ public class AasRefreshService
                 dbSemaphore.Release();
             }
         }
+        else if (anySuccess)
+        {
+            _logger.LogInformation("All tables used Full refresh — skipping separate Calculate step for database '{Database}'",
+                requestData.DatabaseName);
+        }
 
-        // Set final response status: all DataOnly results must succeed AND Calculate must succeed
+        // Set final response status
         var allDataSuccess = !response.RefreshResults.Exists(r => !r.IsSuccess);
         if (allDataSuccess && calculateSuccess)
         {
             response.IsSuccess = true;
             response.Message = "Successfully refreshed all specified tables/partitions.";
         }
-        else if (allDataSuccess && !calculateSuccess && anySuccess)
+        else if (allDataSuccess && !calculateSuccess)
         {
             response.IsSuccess = false;
             response.Message = "Data refresh succeeded but Calculate failed. Model may show 'needs to be recalculated'.";

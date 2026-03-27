@@ -13,8 +13,19 @@ public class RefreshObject
     [JsonPropertyName("partition")]
     public string? Partition { get; set; }
 
+    /// <summary>
+    /// "Full" or "DataOnly". Defaults to "DataOnly" if not specified.
+    /// Full = data + calculate per partition (consistent immediately).
+    /// DataOnly = load data only, calculate once at the end (faster for large tables).
+    /// </summary>
+    [JsonPropertyName("refreshType")]
+    public string? RefreshType { get; set; }
+
+    public bool IsFullRefresh =>
+        string.Equals(RefreshType, "Full", StringComparison.OrdinalIgnoreCase);
+
     public override string ToString()
     {
-        return $"{base.ToString()}: {Table ?? "null"}: {Partition ?? "null"}";
+        return $"{base.ToString()}: {Table ?? "null"}: {Partition ?? "null"}: {RefreshType ?? "DataOnly"}";
     }
 }

@@ -94,7 +94,7 @@
                             },
                             "method": "post",
                             "body": {
-                                "query": "SELECT cube.CubeName as database_name, \n        refresh_objects = JSON_QUERY(CONCAT('[', STRING_AGG(CONCAT('{\"table\":\"', STRING_ESCAPE(cube.CubeTableName, 'json'), '\"', ',', '\"partition\":\"', STRING_ESCAPE(cube.Partition, 'json'), '\"}'), ','), ']'))\nFROM etl.datawarehouseandcubemapping cube\nWHERE cube.CubeName = '@{items('For_each')?['CubeModelName']}'\nGROUP BY CubeName\nFOR JSON PATH, WITHOUT_ARRAY_WRAPPER"
+                                "query": "SELECT cube.CubeName as database_name, \n        refresh_objects = JSON_QUERY(CONCAT('[', STRING_AGG(CONCAT('{\"table\":\"', STRING_ESCAPE(cube.CubeTableName, 'json'), '\"', ',', '\"partition\":\"', STRING_ESCAPE(cube.Partition, 'json'), '\",\"refreshType\":\"', ISNULL(cube.RefreshType, 'DataOnly'), '\"}'), ','), ']'))\nFROM etl.datawarehouseandcubemapping cube\nWHERE cube.CubeName = '@{items('For_each')?['CubeModelName']}'\nGROUP BY CubeName\nFOR JSON PATH, WITHOUT_ARRAY_WRAPPER"
                             },
                             "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
                         }
