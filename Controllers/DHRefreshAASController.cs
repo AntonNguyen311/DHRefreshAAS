@@ -250,9 +250,46 @@ public class DHRefreshAASController
 
         var aasScaledDown = false;
         var elasticPoolScaledDown = false;
+        var skippedDueToRunningOps = false;
 
         try
         {
+            // Check if there are still running operations before scaling down
+            var runningOps = await _operationStorage.GetRunningOperationsAsync();
+
+            // Filter out zombie operations (running longer than timeout) — don't let them block scale-down
+            var zombieTimeout = TimeSpan.FromMinutes(_config.ZombieTimeoutMinutes);
+            var activeOps = runningOps.Where(op => (DateTime.UtcNow - op.StartTime) < zombieTimeout).ToList();
+            var zombieOps = runningOps.Where(op => (DateTime.UtcNow - op.StartTime) >= zombieTimeout).ToList();
+
+            // Clean up zombie operations inline
+            foreach (var zombie in zombieOps)
+            {
+                var age = (DateTime.UtcNow - zombie.StartTime).TotalMinutes;
+                logger.LogWarning("Marking zombie operation {OperationId} as failed (running for {Age:F0} min)", zombie.OperationId, age);
+                await _operationStorage.MarkOperationAsFailedAsync(zombie.OperationId,
+                    $"Operation terminated: marked as zombie during scale-down (running for {age:F0} min, exceeded {_config.ZombieTimeoutMinutes} min timeout)");
+            }
+
+            if (activeOps.Count > 0)
+            {
+                logger.LogWarning(
+                    "Scale-down SKIPPED: {RunningCount} active operation(s) still running. IDs: {OperationIds}",
+                    activeOps.Count,
+                    string.Join(", ", activeOps.Select(op => op.OperationId)));
+                skippedDueToRunningOps = true;
+
+                return await _responseService.CreateSuccessResponseAsync(req, new
+                {
+                    aasScaledDown,
+                    elasticPoolScaledDown,
+                    skippedDueToRunningOps,
+                    runningOperationsCount = activeOps.Count,
+                    zombiesCleaned = zombieOps.Count
+                }, HttpStatusCode.OK);
+            }
+
+            // No running operations — safe to scale down
             // Scale AAS down first
             try
             {
@@ -280,7 +317,8 @@ public class DHRefreshAASController
             return await _responseService.CreateSuccessResponseAsync(req, new
             {
                 aasScaledDown,
-                elasticPoolScaledDown
+                elasticPoolScaledDown,
+                skippedDueToRunningOps
             }, HttpStatusCode.OK);
         }
         catch (Exception ex)

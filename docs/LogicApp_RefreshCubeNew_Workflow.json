@@ -1,0 +1,478 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_a_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "method": "POST"
+                }
+            }
+        },
+        "actions": {
+            "Get_List_CubeName": {
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['sql-1']['connectionId']"
+                        }
+                    },
+                    "method": "post",
+                    "body": {
+                        "query": "select distinct CubeName AS CubeModelName from etl.datawarehouseandcubemapping"
+                    },
+                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                },
+                "runAfter": {}
+            },
+            "varDatabaseResults": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varDatabaseResults",
+                            "type": "array",
+                            "value": []
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Get_List_CubeName": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "varSlowTables": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "varSlowTables",
+                            "type": "array",
+                            "value": []
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "varDatabaseResults": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Scale_Up": {
+                "type": "Function",
+                "inputs": {
+                    "body": {},
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "function": {
+                        "id": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/resourceGroups/vn-rg-sa-sdp-solution-p/providers/Microsoft.Web/sites/vn-fa-sa-sdp-p-aas/functions/DHRefreshAAS_ScaleUp"
+                    }
+                },
+                "runAfter": {
+                    "varSlowTables": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "For_each": {
+                "type": "Foreach",
+                "foreach": "@body('Get_List_CubeName')?['resultsets']?['Table1']",
+                "actions": {
+                    "Get_AAS_Model_Tables_JSON_Format": {
+                        "type": "ApiConnection",
+                        "inputs": {
+                            "host": {
+                                "connection": {
+                                    "name": "@parameters('$connections')['sql-1']['connectionId']"
+                                }
+                            },
+                            "method": "post",
+                            "body": {
+                                "query": "SELECT cube.CubeName as database_name, \n        refresh_objects = JSON_QUERY(CONCAT('[', STRING_AGG(CONCAT('{\"table\":\"', STRING_ESCAPE(cube.CubeTableName, 'json'), '\"', ',', '\"partition\":\"', STRING_ESCAPE(cube.Partition, 'json'), '\"}'), ','), ']'))\nFROM etl.datawarehouseandcubemapping cube\nWHERE cube.CubeName = '@{items('For_each')?['CubeModelName']}'\nGROUP BY CubeName\nFOR JSON PATH, WITHOUT_ARRAY_WRAPPER"
+                            },
+                            "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                        }
+                    },
+                    "Condition": {
+                        "type": "If",
+                        "expression": {
+                            "and": [
+                                {
+                                    "equals": [
+                                        "@empty(body('Get_AAS_Model_Tables_JSON_Format')?['ResultSets'])",
+                                        "@true"
+                                    ]
+                                }
+                            ]
+                        },
+                        "actions": {
+                            "Append_Skipped_Result": {
+                                "type": "AppendToArrayVariable",
+                                "inputs": {
+                                    "name": "varDatabaseResults",
+                                    "value": {
+                                        "database": "@{items('For_each')?['CubeModelName']}",
+                                        "status": "skipped",
+                                        "reason": "No tables to refresh",
+                                        "startTime": "@{utcNow()}",
+                                        "endTime": "@{utcNow()}",
+                                        "operationId": ""
+                                    }
+                                }
+                            }
+                        },
+                        "else": {
+                            "actions": {
+                                "DHRefreshAAS_HttpStart": {
+                                    "type": "Function",
+                                    "inputs": {
+                                        "body": "@string(body('Get_AAS_Model_Tables_JSON_Format')?['ResultSets']['Table1'][0]['JSON_F52E2B61_x002d_18A1_x002d_11d1_x002d_B105_x002d_00805F49916B'])",
+                                        "method": "POST",
+                                        "headers": {
+                                            "Content-Type": "application/json"
+                                        },
+                                        "function": {
+                                            "id": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/resourceGroups/vn-rg-sa-sdp-solution-p/providers/Microsoft.Web/sites/vn-fa-sa-sdp-p-aas/functions/DHRefreshAAS_HttpStart"
+                                        }
+                                    }
+                                },
+                                "Until_Operation_Complete": {
+                                    "type": "Until",
+                                    "expression": "@or(equals(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status'], 'completed'), equals(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status'], 'failed'), equals(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['isCompleted'], true))",
+                                    "limit": {
+                                        "count": 60,
+                                        "timeout": "PT1H"
+                                    },
+                                    "actions": {
+                                        "vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status": {
+                                            "type": "Function",
+                                            "inputs": {
+                                                "method": "GET",
+                                                "queries": {
+                                                    "operationId": "@{body('DHRefreshAAS_HttpStart').operationId}"
+                                                },
+                                                "function": {
+                                                    "id": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/resourceGroups/vn-rg-sa-sdp-solution-p/providers/Microsoft.Web/sites/vn-fa-sa-sdp-p-aas/functions/DHRefreshAAS_Status"
+                                                }
+                                            }
+                                        },
+                                        "Delay": {
+                                            "type": "Wait",
+                                            "inputs": {
+                                                "interval": {
+                                                    "count": 30,
+                                                    "unit": "Second"
+                                                }
+                                            },
+                                            "runAfter": {
+                                                "vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "DHRefreshAAS_HttpStart": [
+                                            "Succeeded"
+                                        ]
+                                    }
+                                },
+                                "Append_Database_Result": {
+                                    "type": "AppendToArrayVariable",
+                                    "inputs": {
+                                        "name": "varDatabaseResults",
+                                        "value": {
+                                            "database": "@{items('For_each')?['CubeModelName']}",
+                                            "status": "@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status']}",
+                                            "startTime": "@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['startTime']}",
+                                            "endTime": "@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['endTime']}",
+                                            "elapsedMinutes": "@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['elapsedMinutes']}",
+                                            "tablesCount": "@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['tablesCount']}",
+                                            "operationId": "@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['operationId']}"
+                                        }
+                                    },
+                                    "runAfter": {
+                                        "Until_Operation_Complete": [
+                                            "Succeeded",
+                                            "Failed"
+                                        ]
+                                    }
+                                },
+                                "Collect_Slow_Tables": {
+                                    "type": "If",
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "not": {
+                                                    "equals": [
+                                                        "@body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['topSlowTables']",
+                                                        "@null"
+                                                    ]
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    "actions": {
+                                        "For_each_SlowTable": {
+                                            "type": "Foreach",
+                                            "foreach": "@body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['topSlowTables']",
+                                            "actions": {
+                                                "Append_Slow_Table": {
+                                                    "type": "AppendToArrayVariable",
+                                                    "inputs": {
+                                                        "name": "varSlowTables",
+                                                        "value": {
+                                                            "database": "@{items('For_each')?['CubeModelName']}",
+                                                            "tableName": "@{items('For_each_SlowTable')?['tableName']}",
+                                                            "partitionName": "@{items('For_each_SlowTable')?['partitionName']}",
+                                                            "processingTimeSeconds": "@{items('For_each_SlowTable')?['processingTimeSeconds']}",
+                                                            "rowCount": "@{items('For_each_SlowTable')?['rowCount']}"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                    "else": {
+                                        "actions": {}
+                                    },
+                                    "runAfter": {
+                                        "Append_Database_Result": [
+                                            "Succeeded"
+                                        ]
+                                    }
+                                },
+                                "Condition_1": {
+                                    "type": "If",
+                                    "expression": {
+                                        "and": [
+                                            {
+                                                "equals": [
+                                                    "@body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status']",
+                                                    "failed"
+                                                ]
+                                            }
+                                        ]
+                                    },
+                                    "actions": {
+                                        "Parse_Failed_Result": {
+                                            "type": "Compose",
+                                            "inputs": "@json(replace(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['result'], '\r\n', ''))"
+                                        },
+                                        "Build_Failure_Detail": {
+                                            "type": "Select",
+                                            "inputs": {
+                                                "from": "@outputs('Parse_Failed_Result')?['RefreshResults']",
+                                                "select": "@concat(item()?['TableName'], ' -> ', if(equals(item()?['IsSuccess'], true), 'Success', 'Failed'), ', Error: ', if(empty(item()?['ErrorMessage']), 'None', item()?['ErrorMessage']))"
+                                            },
+                                            "runAfter": {
+                                                "Parse_Failed_Result": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        },
+                                        "Send_an_email_(V2)": {
+                                            "type": "ApiConnection",
+                                            "inputs": {
+                                                "host": {
+                                                    "connection": {
+                                                        "name": "@parameters('$connections')['office365-1']['connectionId']"
+                                                    }
+                                                },
+                                                "method": "post",
+                                                "body": {
+                                                    "To": "mina.my@deheus.com; Gina.Hai@deheus.com; Anton.Tuan@deheus.com",
+                                                    "Subject": "[FAILED] Refresh Cube - @{items('For_each')?['CubeModelName']}",
+                                                    "Body": "<html><body style=\"font-family: Segoe UI, Arial, sans-serif; font-size: 14px; color: #333;\"><h2 style=\"color: #c0392b;\">Refresh Cube Failed</h2><p>Cube model <b>@{items('For_each')?['CubeModelName']}</b> has encountered errors during refresh.</p><table style=\"border-collapse: collapse; width: 100%; margin: 16px 0;\"><tr style=\"background: #f8f9fa;\"><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Created Time</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['startTime']}</td></tr><tr><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Last Updated</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['endTime']}</td></tr><tr style=\"background: #f8f9fa;\"><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Operation ID</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['operationId']}</td></tr><tr><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Status</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6; color: #c0392b;\"><b>@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status']}</b></td></tr></table><h3>Refresh Details</h3><p>@{join(body('Build_Failure_Detail'), '<br>')}</p><br><p>Best regards,<br><b>Data Team</b></p></body></html>",
+                                                    "From": "DataAnalyticsServices@deheus.com",
+                                                    "Importance": "High"
+                                                },
+                                                "path": "/v2/Mail"
+                                            },
+                                            "runAfter": {
+                                                "Build_Failure_Detail": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        }
+                                    },
+                                    "else": {
+                                        "actions": {}
+                                    },
+                                    "runAfter": {
+                                        "Collect_Slow_Tables": [
+                                            "Succeeded"
+                                        ]
+                                    }
+                                }
+                            }
+                        },
+                        "runAfter": {
+                            "Get_AAS_Model_Tables_JSON_Format": [
+                                "Succeeded"
+                            ]
+                        }
+                    }
+                },
+                "runAfter": {
+                    "Scale_Up": [
+                        "Succeeded"
+                    ]
+                },
+                "runtimeConfiguration": {
+                    "concurrency": {
+                        "repetitions": 4
+                    }
+                }
+            },
+            "Scale_Down": {
+                "type": "Function",
+                "inputs": {
+                    "body": {},
+                    "method": "POST",
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "function": {
+                        "id": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/resourceGroups/vn-rg-sa-sdp-solution-p/providers/Microsoft.Web/sites/vn-fa-sa-sdp-p-aas/functions/DHRefreshAAS_ScaleDown"
+                    }
+                },
+                "runAfter": {
+                    "For_each": [
+                        "Succeeded",
+                        "Failed"
+                    ]
+                }
+            },
+            "Build_Summary_Table": {
+                "type": "Select",
+                "inputs": {
+                    "from": "@variables('varDatabaseResults')",
+                    "select": {
+                        "Database": "@item()?['database']",
+                        "Status": "@item()?['status']",
+                        "Tables": "@item()?['tablesCount']",
+                        "Duration (min)": "@item()?['elapsedMinutes']",
+                        "Start Time": "@item()?['startTime']",
+                        "End Time": "@item()?['endTime']",
+                        "Operation ID": "@item()?['operationId']"
+                    }
+                },
+                "runAfter": {
+                    "Scale_Down": [
+                        "Succeeded",
+                        "Failed"
+                    ]
+                }
+            },
+            "Create_Summary_HTML": {
+                "type": "Table",
+                "inputs": {
+                    "from": "@body('Build_Summary_Table')",
+                    "format": "HTML"
+                },
+                "runAfter": {
+                    "Build_Summary_Table": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Build_Slow_Tables": {
+                "type": "Select",
+                "inputs": {
+                    "from": "@variables('varSlowTables')",
+                    "select": {
+                        "Database": "@item()?['database']",
+                        "Table": "@item()?['tableName']",
+                        "Partition": "@item()?['partitionName']",
+                        "Processing Time (s)": "@item()?['processingTimeSeconds']",
+                        "Row Count": "@item()?['rowCount']"
+                    }
+                },
+                "runAfter": {
+                    "Scale_Down": [
+                        "Succeeded",
+                        "Failed"
+                    ]
+                }
+            },
+            "Create_Slow_Tables_HTML": {
+                "type": "Table",
+                "inputs": {
+                    "from": "@body('Build_Slow_Tables')",
+                    "format": "HTML"
+                },
+                "runAfter": {
+                    "Build_Slow_Tables": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Send_Summary_Email": {
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['office365-1']['connectionId']"
+                        }
+                    },
+                    "method": "post",
+                    "body": {
+                        "To": "mina.my@deheus.com; Gina.Hai@deheus.com; Anton.Tuan@deheus.com",
+                        "Subject": "Refresh Cube Summary - @{utcNow()}",
+                        "Body": "<h2 class=\"editor-heading-h2\">Refresh Cube Summary Report</h2><p class=\"editor-paragraph\">Total databases processed: @{length(variables('varDatabaseResults'))}</p><h3 class=\"editor-heading-h3\">Database Results@{body('Create_Summary_HTML')}<br></h3><h3 class=\"editor-heading-h3\">Top Slow Tables (for optimization)@{if(equals(length(variables('varSlowTables')), 0), '<p style=\"color: #7f8c8d;\">No slow table data available.</p>', body('Create_Slow_Tables_HTML'))}<br></h3><p class=\"editor-paragraph\">Best regards,<br><b><strong class=\"editor-text-bold\">Data Team</strong></b></p><br>",
+                        "From": "DataAnalyticsServices@deheus.com",
+                        "Importance": "Normal"
+                    },
+                    "path": "/v2/Mail"
+                },
+                "runAfter": {
+                    "Create_Summary_HTML": [
+                        "Succeeded"
+                    ],
+                    "Create_Slow_Tables_HTML": [
+                        "Succeeded"
+                    ]
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": {
+                "type": "Object",
+                "defaultValue": {}
+            }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "sql-1": {
+                    "id": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/providers/Microsoft.Web/locations/southeastasia/managedApis/sql",
+                    "connectionId": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/resourceGroups/vn-rg-sa-sdp-solution-p/providers/Microsoft.Web/connections/sql-2",
+                    "connectionName": "sql-2",
+                    "connectionProperties": {}
+                },
+                "office365": {
+                    "id": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/providers/Microsoft.Web/locations/southeastasia/managedApis/office365",
+                    "connectionId": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/resourceGroups/vn-rg-sa-sdp-solution-p/providers/Microsoft.Web/connections/office365",
+                    "connectionName": "office365",
+                    "connectionProperties": {}
+                },
+                "office365-1": {
+                    "id": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/providers/Microsoft.Web/locations/southeastasia/managedApis/office365",
+                    "connectionId": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/resourceGroups/vn-rg-sa-sdp-solution-p/providers/Microsoft.Web/connections/office365-1",
+                    "connectionName": "office365-1",
+                    "connectionProperties": {}
+                }
+            }
+        }
+    }
+}
