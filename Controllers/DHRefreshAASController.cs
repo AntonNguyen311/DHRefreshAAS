@@ -186,6 +186,7 @@ public class DHRefreshAASController
 
         var aasScaledUp = false;
         var elasticPoolScaledUp = false;
+        var modelReady = false;
 
         try
         {
@@ -200,7 +201,7 @@ public class DHRefreshAASController
                 logger.LogError(ex, "Elastic Pool scale-up failed");
             }
 
-            // Scale AAS (scaling restarts the server)
+            // Scale AAS (scaling restarts the server and clears in-memory model data)
             try
             {
                 aasScaledUp = await _scalingService.ScaleUpAsync(CancellationToken.None);
@@ -211,10 +212,22 @@ public class DHRefreshAASController
                 logger.LogError(ex, "AAS scale-up failed");
             }
 
+            // Wait for model to reload into memory after scaling
+            if (aasScaledUp)
+            {
+                logger.LogInformation("AAS scaled up, waiting for model to reload into memory...");
+                modelReady = await _connectionService.WaitForModelReadyAsync(CancellationToken.None);
+                if (!modelReady)
+                {
+                    logger.LogWarning("Model readiness check timed out — model may not be fully loaded");
+                }
+            }
+
             return await _responseService.CreateSuccessResponseAsync(req, new
             {
                 aasScaledUp,
-                elasticPoolScaledUp
+                elasticPoolScaledUp,
+                modelReady
             }, HttpStatusCode.OK);
         }
         catch (Exception ex)

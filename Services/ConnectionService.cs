@@ -349,6 +349,57 @@ public class ConnectionService
     }
 
     /// <summary>
+    /// Wait for AAS model to be fully loaded into memory after scaling.
+    /// Scaling restarts the server and clears in-memory data; this method
+    /// polls until the database is accessible and the model is loaded.
+    /// </summary>
+    public virtual async Task<bool> WaitForModelReadyAsync(CancellationToken cancellationToken, int maxRetries = 12, int delaySeconds = 15)
+    {
+        _logger.LogInformation("Waiting for AAS model '{Database}' to be ready (max {MaxWait}s)...",
+            _config.AasDatabase, maxRetries * delaySeconds);
+
+        for (int i = 0; i < maxRetries; i++)
+        {
+            Server? server = null;
+            try
+            {
+                server = new Server();
+                var connectionString = BuildConnectionString(connectTimeoutSeconds: 30, commandTimeoutSeconds: 30);
+                await Task.Run(() => server.Connect(connectionString), cancellationToken);
+
+                if (server.Connected)
+                {
+                    var database = server.Databases.GetByName(_config.AasDatabase);
+                    if (database != null)
+                    {
+                        var tableCount = database.Model?.Tables?.Count ?? 0;
+                        _logger.LogInformation(
+                            "Model ready: Database '{Database}' loaded with {TableCount} tables (attempt {Attempt}/{Max})",
+                            _config.AasDatabase, tableCount, i + 1, maxRetries);
+                        return true;
+                    }
+                    _logger.LogWarning("Model ready check: Database '{Database}' not found (attempt {Attempt}/{Max})",
+                        _config.AasDatabase, i + 1, maxRetries);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Model ready check failed (attempt {Attempt}/{Max}): {Message}",
+                    i + 1, maxRetries, ex.Message);
+            }
+            finally
+            {
+                await SafeDisconnectAsync(server);
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
+        }
+
+        _logger.LogWarning("Model readiness check timed out after {MaxWait}s", maxRetries * delaySeconds);
+        return false;
+    }
+
+    /// <summary>
     /// Safely disconnect from server with error handling
     /// </summary>
     public virtual async Task SafeDisconnectAsync(Server? server)
