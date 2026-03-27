@@ -1,7 +1,8 @@
 -- Add RefreshType column to etl.datawarehouseandcubemapping
--- Values: 'Full' = data + calculate per partition (consistent immediately, slower)
---         'DataOnly' = load data only, calculate once at the end (faster for large tables)
--- Default: 'DataOnly' (backward compatible — same behavior as before)
+-- Values: 'Full'     = data + calculate per partition (safe, no report errors during refresh)
+--         'DataOnly' = load data only, calculate once at the end (faster for large tables,
+--                      but reports may show 'needs to be recalculated' until Calculate completes)
+-- Default: 'Full' (safe — manually set large/slow tables to 'DataOnly' for performance)
 
 IF NOT EXISTS (
     SELECT 1 FROM sys.columns
@@ -10,9 +11,9 @@ IF NOT EXISTS (
 )
 BEGIN
     ALTER TABLE etl.datawarehouseandcubemapping
-    ADD RefreshType NVARCHAR(20) NOT NULL DEFAULT 'DataOnly';
+    ADD RefreshType NVARCHAR(20) NOT NULL DEFAULT 'Full';
 
-    PRINT 'Column RefreshType added to etl.datawarehouseandcubemapping';
+    PRINT 'Column RefreshType added to etl.datawarehouseandcubemapping (default: Full)';
 END
 ELSE
 BEGIN
@@ -20,18 +21,11 @@ BEGIN
 END
 GO
 
--- Set dimension tables to 'Full' (small tables, need immediate consistency)
--- Adjust the WHERE clause based on your actual dimension table naming convention
-UPDATE etl.datawarehouseandcubemapping
-SET RefreshType = 'Full'
-WHERE CubeTableName LIKE 'd%'  -- dimension tables typically start with 'd'
-  AND RefreshType = 'DataOnly';
-
-PRINT 'Updated dimension tables to Full refresh type';
-GO
-
 -- Verify
 SELECT CubeTableName, Partition, RefreshType, CubeName
 FROM etl.datawarehouseandcubemapping
 ORDER BY RefreshType, CubeTableName;
 GO
+
+-- To set specific large tables to DataOnly for better performance, run:
+-- UPDATE etl.datawarehouseandcubemapping SET RefreshType = 'DataOnly' WHERE CubeTableName IN ('fSalesNAV', 'fInventory', ...);
