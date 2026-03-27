@@ -387,13 +387,13 @@ public class AasRefreshService
                     if (string.IsNullOrEmpty(refreshObj.Partition))
                     {
                         _logger.LogInformation("Requesting refresh for table '{TableName}'", refreshObj.Table);
-                        table.RequestRefresh(RefreshType.Full);
+                        table.RequestRefresh(RefreshType.DataOnly);
                     }
                     else
                     {
                         _logger.LogInformation("Requesting refresh for partition '{PartitionName}' in table '{TableName}'",
                             refreshObj.Partition, refreshObj.Table);
-                        table.Partitions[refreshObj.Partition].RequestRefresh(RefreshType.Full);
+                        table.Partitions[refreshObj.Partition].RequestRefresh(RefreshType.DataOnly);
                     }
                     result.IsSuccess = true;
                 }
@@ -498,6 +498,32 @@ public class AasRefreshService
 
                 response.RefreshResults.Add(result);
                 progressCallback?.Invoke(result.TableName, result.IsSuccess, result.ErrorMessage);
+            }
+        }
+
+        // Recalculate the model once after all DataOnly batches complete
+        var anySuccess = response.RefreshResults.Any(r => r.IsSuccess);
+        if (anySuccess)
+        {
+            _logger.LogInformation("All DataOnly batches complete. Starting model Calculate for database '{Database}'...",
+                requestData.DatabaseName);
+            await dbSemaphore.WaitAsync(cancellationToken);
+            try
+            {
+                model.RequestRefresh(RefreshType.Calculate);
+                await ExecuteBatchSaveChangesAsync(model, maxParallelism, effectiveSaveTimeoutMinutes,
+                    batches.Count + 1, batches.Count + 1, cancellationToken);
+                _logger.LogInformation("Model Calculate completed for database '{Database}'", requestData.DatabaseName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Model Calculate failed for database '{Database}': {Error}",
+                    requestData.DatabaseName, ex.Message);
+                response.Message = $"Data refresh succeeded but Calculate failed: {ex.Message}";
+            }
+            finally
+            {
+                dbSemaphore.Release();
             }
         }
     }
