@@ -380,13 +380,13 @@ public class AasRefreshService
                     if (string.IsNullOrEmpty(refreshObj.Partition))
                     {
                         _logger.LogInformation("Requesting refresh for table '{TableName}'", refreshObj.Table);
-                        table.RequestRefresh(RefreshType.DataOnly);
+                        table.RequestRefresh(RefreshType.Full);
                     }
                     else
                     {
                         _logger.LogInformation("Requesting refresh for partition '{PartitionName}' in table '{TableName}'",
                             refreshObj.Partition, refreshObj.Table);
-                        table.Partitions[refreshObj.Partition].RequestRefresh(RefreshType.DataOnly);
+                        table.Partitions[refreshObj.Partition].RequestRefresh(RefreshType.Full);
                     }
                     result.IsSuccess = true;
                 }
