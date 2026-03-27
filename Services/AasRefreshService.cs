@@ -511,14 +511,24 @@ public class AasRefreshService
             try
             {
                 model.RequestRefresh(RefreshType.Calculate);
-                await ExecuteBatchSaveChangesAsync(model, maxParallelism, effectiveSaveTimeoutMinutes,
+                var calculateSuccess = await ExecuteBatchSaveChangesAsync(model, maxParallelism, effectiveSaveTimeoutMinutes,
                     batches.Count + 1, batches.Count + 1, cancellationToken);
-                _logger.LogInformation("Model Calculate completed for database '{Database}'", requestData.DatabaseName);
+                if (calculateSuccess)
+                {
+                    _logger.LogInformation("Model Calculate completed for database '{Database}'", requestData.DatabaseName);
+                }
+                else
+                {
+                    _logger.LogError("Model Calculate SaveChanges failed for database '{Database}'", requestData.DatabaseName);
+                    response.IsSuccess = false;
+                    response.Message = "Data refresh succeeded but Calculate failed. Model may show 'needs to be recalculated'.";
+                }
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Model Calculate failed for database '{Database}': {Error}",
                     requestData.DatabaseName, ex.Message);
+                response.IsSuccess = false;
                 response.Message = $"Data refresh succeeded but Calculate failed: {ex.Message}";
             }
             finally
