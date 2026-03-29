@@ -80,12 +80,66 @@
                             },
                             "method": "post",
                             "body": {
-                                "query": "DECLARE @CountryKey INT = (SELECT TOP 1 MasterSettings_CountryKey FROM etl.vw_EtlLog etllog WHERE etllog.LineageKey = @{variables('MasterEtlLineageKey')} AND MasterSettings_CountryKey IS NOT NULL) \nSELECT cube.CubeName as database_name, \n        refresh_objects = JSON_QUERY(CONCAT('[', STRING_AGG(CONCAT('{\"table\":\"', STRING_ESCAPE(cube.CubeTableName, 'json'), '\"', ',', '\"partition\":\"', STRING_ESCAPE(cube.Partition, 'json'), '\",\"refreshType\":\"', ISNULL(cube.RefreshType, 'Full'), '\"}'), ','), ']'))\nFROM\n(\n    SELECT Distinct SchemaName, TableName, @CountryKey AS CountryKey \n    FROM etl.vw_EtlLog etllog\n    WHERE etllog.LineageKey = @{variables('MasterEtlLineageKey')} \n        AND etllog.StageName = 'LOAD' \n        AND etllog.ActivityStatus = 'Succeeded' \n        AND coalesce(etllog.ActivityOutput_LoadInsertedRows, 0) \n            + coalesce(etllog.ActivityOutput_LoadUpdatedRows, 0) \n            + coalesce(etllog.ActivityOutput_LoadDeletedRows, 0) > 0\n    UNION\n    SELECT 'ETL' SchemaName, 'vw_EtlLog' TableName, @CountryKey AS CountryKey\n    UNION\n    SELECT SchemaName, TableName, @CountryKey AS CountryKey FROM etl.datawarehouseandcubemapping WHERE IsAlwayRefreshed = 1 AND ISNULL(IsDisabled, 0) = 0\n) etlLog\n    INNER JOIN etl.datawarehouseandcubemapping cube ON etllog.SchemaName=cube.SchemaName \n                                                    AND etllog.TableName=cube.TableName\n                                                    AND cube.CubeName = '@{items('For_each')?['CubeModelName']}'\n                                                    AND ISNULL(cube.IsDisabled, 0) = 0\nGROUP BY CubeName\nFOR JSON PATH, WITHOUT_ARRAY_WRAPPER"
+                                "query": "DECLARE @CountryKey INT = (SELECT TOP 1 MasterSettings_CountryKey FROM etl.vw_EtlLog etllog WHERE etllog.LineageKey = @{variables('MasterEtlLineageKey')} AND MasterSettings_CountryKey IS NOT NULL); \nWITH etlLog AS (\n    SELECT\n        etllog.SchemaName,\n        etllog.TableName,\n        @CountryKey AS CountryKey,\n        SUM(\n            COALESCE(etllog.ActivityOutput_LoadInsertedRows, 0)\n            + COALESCE(etllog.ActivityOutput_LoadUpdatedRows, 0)\n            + COALESCE(etllog.ActivityOutput_LoadDeletedRows, 0)\n        ) AS ChangedRowCount\n    FROM etl.vw_EtlLog etllog\n    WHERE etllog.LineageKey = @{variables('MasterEtlLineageKey')}\n        AND etllog.StageName = 'LOAD'\n        AND etllog.ActivityStatus = 'Succeeded'\n    GROUP BY etllog.SchemaName, etllog.TableName\n    HAVING SUM(\n        COALESCE(etllog.ActivityOutput_LoadInsertedRows, 0)\n        + COALESCE(etllog.ActivityOutput_LoadUpdatedRows, 0)\n        + COALESCE(etllog.ActivityOutput_LoadDeletedRows, 0)\n    ) > 0\n    UNION ALL\n    SELECT 'ETL', 'vw_EtlLog', @CountryKey, NULL\n    UNION ALL\n    SELECT cube.SchemaName, cube.TableName, @CountryKey, NULL\n    FROM etl.datawarehouseandcubemapping cube\n    WHERE cube.IsAlwayRefreshed = 1 AND ISNULL(cube.IsDisabled, 0) = 0\n), candidate AS (\n    SELECT\n        cube.CubeName,\n        cube.CubeTableName,\n        cube.Partition,\n        ISNULL(cube.RefreshType, 'Full') AS RefreshType,\n        ISNULL(cube.IsIgnored, 0) AS IsIgnored,\n        NULLIF(LTRIM(RTRIM(cube.IgnoreReason)), '') AS IgnoreReason,\n        NULLIF(LTRIM(RTRIM(cube.FixGuide)), '') AS FixGuide,\n        NULLIF(LTRIM(RTRIM(cube.OwnerEmails)), '') AS OwnerEmails,\n        NULLIF(LTRIM(RTRIM(cube.GuardrailType)), '') AS GuardrailType,\n        ISNULL(cube.RequirePartition, 0) AS RequirePartition,\n        cube.MaxRowsPerRun,\n        cube.MaxLookbackMonths,\n        MAX(etlLog.ChangedRowCount) AS ChangedRowCount,\n        CASE\n            WHEN ISNULL(cube.IsIgnored, 0) = 1 THEN 0\n            WHEN ISNULL(cube.RequirePartition, 0) = 1 AND NULLIF(LTRIM(RTRIM(ISNULL(cube.Partition, ''))), '') IS NULL THEN 0\n            WHEN cube.MaxRowsPerRun IS NOT NULL AND ISNULL(MAX(etlLog.ChangedRowCount), 0) > cube.MaxRowsPerRun THEN 0\n            ELSE 1\n        END AS IsRunnable,\n        CASE\n            WHEN ISNULL(cube.IsIgnored, 0) = 1 THEN COALESCE(NULLIF(LTRIM(RTRIM(cube.IgnoreReason)), ''), 'Manually ignored in etl.datawarehouseandcubemapping.')\n            WHEN ISNULL(cube.RequirePartition, 0) = 1 AND NULLIF(LTRIM(RTRIM(ISNULL(cube.Partition, ''))), '') IS NULL THEN 'Partition is required before this table can be refreshed.'\n            WHEN cube.MaxRowsPerRun IS NOT NULL AND ISNULL(MAX(etlLog.ChangedRowCount), 0) > cube.MaxRowsPerRun THEN CONCAT('Change volume ', CONVERT(NVARCHAR(30), ISNULL(MAX(etlLog.ChangedRowCount), 0)), ' exceeds MaxRowsPerRun ', CONVERT(NVARCHAR(30), cube.MaxRowsPerRun), '.')\n            ELSE NULL\n        END AS EffectiveIgnoreReason,\n        CASE\n            WHEN ISNULL(cube.IsIgnored, 0) = 1 THEN COALESCE(NULLIF(LTRIM(RTRIM(cube.GuardrailType)), ''), 'ManualIgnore')\n            WHEN ISNULL(cube.RequirePartition, 0) = 1 AND NULLIF(LTRIM(RTRIM(ISNULL(cube.Partition, ''))), '') IS NULL THEN 'RequirePartition'\n            WHEN cube.MaxRowsPerRun IS NOT NULL AND ISNULL(MAX(etlLog.ChangedRowCount), 0) > cube.MaxRowsPerRun THEN 'MaxRowsPerRun'\n            ELSE COALESCE(NULLIF(LTRIM(RTRIM(cube.GuardrailType)), ''), 'RuntimeGuidance')\n        END AS EffectiveGuardrailType\n    FROM etlLog\n    INNER JOIN etl.datawarehouseandcubemapping cube\n        ON etlLog.SchemaName = cube.SchemaName\n        AND etlLog.TableName = cube.TableName\n        AND cube.CubeName = '@{items('For_each')?['CubeModelName']}'\n        AND ISNULL(cube.IsDisabled, 0) = 0\n    GROUP BY cube.CubeName, cube.CubeTableName, cube.Partition, cube.RefreshType, cube.IsIgnored, cube.IgnoreReason, cube.FixGuide, cube.OwnerEmails, cube.GuardrailType, cube.RequirePartition, cube.MaxRowsPerRun, cube.MaxLookbackMonths\n)\nSELECT\n    MAX(candidate.CubeName) AS DatabaseName,\n    CASE\n        WHEN SUM(CASE WHEN candidate.IsRunnable = 1 THEN 1 ELSE 0 END) = 0 THEN NULL\n        ELSE (\n            SELECT\n                MAX(runnable.CubeName) AS database_name,\n                JSON_QUERY(CONCAT('[', STRING_AGG(CONCAT('{\"table\":\"', STRING_ESCAPE(runnable.CubeTableName, 'json'), '\",\"partition\":\"', STRING_ESCAPE(ISNULL(runnable.Partition, ''), 'json'), '\",\"refreshType\":\"', STRING_ESCAPE(runnable.RefreshType, 'json'), '\"}'), ','), ']')) AS refresh_objects\n            FROM candidate runnable\n            WHERE runnable.IsRunnable = 1\n            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER\n        )\n    END AS RefreshPayload,\n    COALESCE((\n        SELECT\n            ignored.CubeTableName AS [table],\n            ISNULL(ignored.Partition, '') AS partition,\n            ignored.EffectiveIgnoreReason AS ignoreReason,\n            COALESCE(ignored.FixGuide, 'Review source view/query, create or refine partitions, and reduce the data window before re-enabling this table.') AS fixGuide,\n            COALESCE(ignored.OwnerEmails, 'mina.my@deheus.com; Gina.Hai@deheus.com; Anton.Tuan@deheus.com') AS ownerEmails,\n            ignored.EffectiveGuardrailType AS guardrailType,\n            ignored.ChangedRowCount AS changedRowCount,\n            ignored.MaxRowsPerRun AS maxRowsPerRun,\n            ignored.MaxLookbackMonths AS maxLookbackMonths\n        FROM candidate ignored\n        WHERE ignored.IsRunnable = 0\n        FOR JSON PATH\n    ), '[]') AS IgnoredTables,\n    COALESCE(NULLIF(STUFF((\n        SELECT DISTINCT ';' + COALESCE(NULLIF(ignored.OwnerEmails, ''), 'mina.my@deheus.com; Gina.Hai@deheus.com; Anton.Tuan@deheus.com')\n        FROM candidate ignored\n        WHERE ignored.IsRunnable = 0\n        FOR XML PATH(''), TYPE\n    ).value('.', 'nvarchar(max)'), 1, 1, ''), ''), 'mina.my@deheus.com; Gina.Hai@deheus.com; Anton.Tuan@deheus.com') AS WarningRecipients\nFROM candidate"
                             },
                             "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
                         },
                         "runAfter": {
                             "Current_Database": [
+                                "Succeeded"
+                            ]
+                        }
+                    },
+                    "Ignored_Tables_Condition": {
+                        "type": "If",
+                        "expression": {
+                            "and": [
+                                {
+                                    "greater": [
+                                        "@length(json(coalesce(body('Get_AAS_Model_Tables_JSON_Format')?['ResultSets']?['Table1'][0]?['IgnoredTables'], '[]')))",
+                                        0
+                                    ]
+                                }
+                            ]
+                        },
+                        "actions": {
+                            "Create_Ignored_Tables_HTML": {
+                                "type": "Table",
+                                "inputs": {
+                                    "from": "@json(coalesce(body('Get_AAS_Model_Tables_JSON_Format')?['ResultSets']?['Table1'][0]?['IgnoredTables'], '[]'))",
+                                    "format": "HTML"
+                                }
+                            },
+                            "Send_PreRefresh_Warning_Email": {
+                                "type": "ApiConnection",
+                                "inputs": {
+                                    "host": {
+                                        "connection": {
+                                            "name": "@parameters('$connections')['office365-1']['connectionId']"
+                                        }
+                                    },
+                                    "method": "post",
+                                    "body": {
+                                        "To": "@{coalesce(body('Get_AAS_Model_Tables_JSON_Format')?['ResultSets']?['Table1'][0]?['WarningRecipients'], 'mina.my@deheus.com; Gina.Hai@deheus.com; Anton.Tuan@deheus.com')}",
+                                        "Subject": "[WARNING] Refresh Cube - ignored tables for @{items('For_each')?['CubeModelName']}",
+                                        "Body": "<html><body style=\"font-family: Segoe UI, Arial, sans-serif; font-size: 14px; color: #333;\"><h2 style=\"color: #b9770e;\">Refresh Cube Warning</h2><p>Cube model <b>@{items('For_each')?['CubeModelName']}</b> has one or more tables excluded before refresh.</p><p>These tables were skipped to avoid a known failure pattern or an oversized load. Please review the guide below before re-enabling them.</p>@{body('Create_Ignored_Tables_HTML')}<br><p>Best regards,<br><b>Data Team</b></p></body></html>",
+                                        "From": "DataAnalyticsServices@deheus.com",
+                                        "Importance": "High"
+                                    },
+                                    "path": "/v2/Mail"
+                                },
+                                "runAfter": {
+                                    "Create_Ignored_Tables_HTML": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            }
+                        },
+                        "else": {
+                            "actions": {}
+                        },
+                        "runAfter": {
+                            "Get_AAS_Model_Tables_JSON_Format": [
                                 "Succeeded"
                             ]
                         }
@@ -96,7 +150,7 @@
                             "and": [
                                 {
                                     "equals": [
-                                        "@empty(body('Get_AAS_Model_Tables_JSON_Format')?['ResultSets'])",
+                                        "@empty(body('Get_AAS_Model_Tables_JSON_Format')?['ResultSets']?['Table1'][0]?['RefreshPayload'])",
                                         "@true"
                                     ]
                                 }
@@ -110,7 +164,7 @@
                                     "value": {
                                         "database": "@{items('For_each')?['CubeModelName']}",
                                         "status": "skipped",
-                                        "reason": "No tables to refresh",
+                                        "reason": "@{if(greater(length(json(coalesce(body('Get_AAS_Model_Tables_JSON_Format')?['ResultSets']?['Table1'][0]?['IgnoredTables'], '[]'))), 0), 'All candidate tables were ignored by pre-refresh guardrails', 'No tables to refresh')}",
                                         "startTime": "@{utcNow()}",
                                         "endTime": "@{utcNow()}",
                                         "operationId": ""
@@ -123,7 +177,7 @@
                                 "DHRefreshAAS_HttpStart": {
                                     "type": "Function",
                                     "inputs": {
-                                        "body": "@string(body('Get_AAS_Model_Tables_JSON_Format')?['ResultSets']['Table1'][0]['JSON_F52E2B61_x002d_18A1_x002d_11d1_x002d_B105_x002d_00805F49916B'])",
+                                        "body": "@string(body('Get_AAS_Model_Tables_JSON_Format')?['ResultSets']['Table1'][0]['RefreshPayload'])",
                                         "method": "POST",
                                         "headers": {
                                             "Content-Type": "application/json"
@@ -259,11 +313,43 @@
                                         "Build_Failure_Detail": {
                                             "type": "Select",
                                             "inputs": {
-                                                "from": "@outputs('Parse_Failed_Result')?['RefreshResults']",
-                                                "select": "@concat(item()?['TableName'], ' -> ', if(equals(item()?['IsSuccess'], true), 'Success', 'Failed'), ', Error: ', if(empty(item()?['ErrorMessage']), 'None', item()?['ErrorMessage']))"
+                                                "from": "@outputs('Parse_Failed_Result')?['refreshResults']",
+                                                "select": "@concat(item()?['tableName'], ' -> ', if(equals(item()?['isSuccess'], true), 'Success', 'Failed'), ', Error: ', if(empty(item()?['errorMessage']), 'None', item()?['errorMessage']))"
                                             },
                                             "runAfter": {
                                                 "Parse_Failed_Result": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        },
+                                        "Get_Failed_Table_Guidance": {
+                                            "type": "ApiConnection",
+                                            "inputs": {
+                                                "host": {
+                                                    "connection": {
+                                                        "name": "@parameters('$connections')['sql']['connectionId']"
+                                                    }
+                                                },
+                                                "method": "post",
+                                                "body": {
+                                                    "query": "DECLARE @FailedTargets NVARCHAR(MAX) = '@{join(coalesce(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['lastBatch']?['tables'], createArray()), '|')}'\nSELECT\n    COALESCE((\n        SELECT\n            cube.CubeTableName AS [table],\n            ISNULL(cube.Partition, '') AS partition,\n            COALESCE(NULLIF(LTRIM(RTRIM(cube.FixGuide)), ''), 'Review source view/query, create or refine partitions, and reduce the data window before re-running this table.') AS fixGuide,\n            COALESCE(NULLIF(LTRIM(RTRIM(cube.OwnerEmails)), ''), 'mina.my@deheus.com; Gina.Hai@deheus.com; Anton.Tuan@deheus.com') AS ownerEmails,\n            COALESCE(NULLIF(LTRIM(RTRIM(cube.GuardrailType)), ''), 'RuntimeFailure') AS guardrailType\n        FROM etl.datawarehouseandcubemapping cube\n        WHERE cube.CubeName = '@{items('For_each')?['CubeModelName']}'\n            AND EXISTS (\n                SELECT 1\n                FROM string_split(@FailedTargets, '|') failedTarget\n                WHERE LTRIM(RTRIM(failedTarget.value)) = cube.CubeTableName\n                    OR LTRIM(RTRIM(failedTarget.value)) = CONCAT(cube.CubeTableName, '::', ISNULL(cube.Partition, ''))\n            )\n        FOR JSON PATH\n    ), '[]') AS FailureGuidance,\n    COALESCE(NULLIF(STUFF((\n        SELECT DISTINCT ';' + COALESCE(NULLIF(LTRIM(RTRIM(cube.OwnerEmails)), ''), 'mina.my@deheus.com; Gina.Hai@deheus.com; Anton.Tuan@deheus.com')\n        FROM etl.datawarehouseandcubemapping cube\n        WHERE cube.CubeName = '@{items('For_each')?['CubeModelName']}'\n            AND EXISTS (\n                SELECT 1\n                FROM string_split(@FailedTargets, '|') failedTarget\n                WHERE LTRIM(RTRIM(failedTarget.value)) = cube.CubeTableName\n                    OR LTRIM(RTRIM(failedTarget.value)) = CONCAT(cube.CubeTableName, '::', ISNULL(cube.Partition, ''))\n            )\n        FOR XML PATH(''), TYPE\n    ).value('.', 'nvarchar(max)'), 1, 1, ''), ''), 'mina.my@deheus.com; Gina.Hai@deheus.com; Anton.Tuan@deheus.com') AS FailureRecipients"
+                                                },
+                                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/query/sql"
+                                            },
+                                            "runAfter": {
+                                                "Parse_Failed_Result": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        },
+                                        "Create_Failure_Guide_HTML": {
+                                            "type": "Table",
+                                            "inputs": {
+                                                "from": "@json(coalesce(body('Get_Failed_Table_Guidance')?['ResultSets']?['Table1'][0]?['FailureGuidance'], '[]'))",
+                                                "format": "HTML"
+                                            },
+                                            "runAfter": {
+                                                "Get_Failed_Table_Guidance": [
                                                     "Succeeded"
                                                 ]
                                             }
@@ -278,9 +364,9 @@
                                                 },
                                                 "method": "post",
                                                 "body": {
-                                                    "To": "mina.my@deheus.com; Gina.Hai@deheus.com; Anton.Tuan@deheus.com",
+                                                    "To": "@{coalesce(body('Get_Failed_Table_Guidance')?['ResultSets']?['Table1'][0]?['FailureRecipients'], 'mina.my@deheus.com; Gina.Hai@deheus.com; Anton.Tuan@deheus.com')}",
                                                     "Subject": "[FAILED] Refresh Cube - @{items('For_each')?['CubeModelName']}",
-                                                    "Body": "<html><body style=\"font-family: Segoe UI, Arial, sans-serif; font-size: 14px; color: #333;\"><h2 style=\"color: #c0392b;\">Refresh Cube Failed</h2><p>Cube model <b>@{items('For_each')?['CubeModelName']}</b> has encountered errors during refresh.</p><table style=\"border-collapse: collapse; width: 100%; margin: 16px 0;\"><tr style=\"background: #f8f9fa;\"><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Created Time</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['startTime']}</td></tr><tr><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Last Updated</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['endTime']}</td></tr><tr style=\"background: #f8f9fa;\"><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Operation ID</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['operationId']}</td></tr><tr><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Status</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6; color: #c0392b;\"><b>@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status']}</b></td></tr></table><h3>Refresh Details</h3><p>@{join(body('Build_Failure_Detail'), '<br>')}</p><br><p>Best regards,<br><b>Data Team</b></p></body></html>",
+                                                    "Body": "<html><body style=\"font-family: Segoe UI, Arial, sans-serif; font-size: 14px; color: #333;\"><h2 style=\"color: #c0392b;\">Refresh Cube Failed</h2><p>Cube model <b>@{items('For_each')?['CubeModelName']}</b> has encountered errors during refresh.</p><table style=\"border-collapse: collapse; width: 100%; margin: 16px 0;\"><tr style=\"background: #f8f9fa;\"><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Created Time</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['startTime']}</td></tr><tr><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Last Updated</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['endTime']}</td></tr><tr style=\"background: #f8f9fa;\"><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Operation ID</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['operationId']}</td></tr><tr><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Status</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6; color: #c0392b;\"><b>@{body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['status']}</b></td></tr><tr style=\"background: #f8f9fa;\"><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Failure Source</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{coalesce(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['lastBatch']?['failureSource'], 'Unknown')}</td></tr><tr><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Failure Category</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{coalesce(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['lastBatch']?['failureCategory'], 'Unknown')}</td></tr><tr style=\"background: #f8f9fa;\"><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Last Batch Tables</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{join(coalesce(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['lastBatch']?['tables'], createArray()), '<br>')}</td></tr><tr><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\"><b>Last Batch Error</b></td><td style=\"padding: 8px 12px; border: 1px solid #dee2e6;\">@{coalesce(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['lastBatch']?['error'], body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['errorMessage'], 'No detailed error returned')}</td></tr></table><h3>Fix Direction</h3><p>@{if(equals(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['lastBatch']?['failureSource'], 'AzureSQLOrDataSource'), 'Check source view/query, ETL overlap, SQL transient errors, and data volume. Consider partitioning or reducing lookback.', if(equals(body('vn-fa-sa-sdp-p-aas-DHRefreshAAS_Status')?['lastBatch']?['failureCategory'], 'Timeout'), 'Check whether the command is still running server-side before retrying.', 'Check AAS capacity, memory pressure, model contention, and concurrent refresh activity.'))}</p><h3>Refresh Details</h3><p>@{join(body('Build_Failure_Detail'), '<br>')}</p><h3>Suggested Table Guides</h3>@{body('Create_Failure_Guide_HTML')}<br><p>Best regards,<br><b>Data Team</b></p></body></html>",
                                                     "From": "DataAnalyticsServices@deheus.com",
                                                     "Importance": "High"
                                                 },
@@ -288,6 +374,9 @@
                                             },
                                             "runAfter": {
                                                 "Build_Failure_Detail": [
+                                                    "Succeeded"
+                                                ],
+                                                "Create_Failure_Guide_HTML": [
                                                     "Succeeded"
                                                 ]
                                             }
@@ -305,7 +394,7 @@
                             }
                         },
                         "runAfter": {
-                            "Get_AAS_Model_Tables_JSON_Format": [
+                            "Ignored_Tables_Condition": [
                                 "Succeeded"
                             ]
                         }
