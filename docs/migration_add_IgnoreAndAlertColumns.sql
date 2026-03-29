@@ -5,6 +5,24 @@ IF NOT EXISTS (
     SELECT 1
     FROM sys.columns
     WHERE object_id = OBJECT_ID('etl.datawarehouseandcubemapping')
+      AND name = 'IsDisabled'
+)
+BEGIN
+    ALTER TABLE etl.datawarehouseandcubemapping
+    ADD IsDisabled BIT NOT NULL CONSTRAINT DF_datawarehouseandcubemapping_IsDisabled DEFAULT (0);
+
+    PRINT 'Column IsDisabled added';
+END
+ELSE
+BEGIN
+    PRINT 'Column IsDisabled already exists';
+END
+GO
+
+IF NOT EXISTS (
+    SELECT 1
+    FROM sys.columns
+    WHERE object_id = OBJECT_ID('etl.datawarehouseandcubemapping')
       AND name = 'IsIgnored'
 )
 BEGIN
@@ -165,6 +183,7 @@ SELECT
     CubeTableName,
     Partition,
     RefreshType,
+    IsDisabled,
     IsIgnored,
     IgnoreReason,
     FixGuide,
