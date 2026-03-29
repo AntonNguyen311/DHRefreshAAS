@@ -386,8 +386,8 @@ public class DHRefreshAASController
                     });
                 });
                 
-                // Create SaveChanges callback to update phase
-                var saveChangesCallback = new Action(() =>
+                // Track the batch currently entering SaveChanges so zombie operations keep useful context.
+                var saveChangesCallback = new Action<SaveChangesDiagnostic>(diagnostic =>
                 {
                     _ = Task.Run(async () =>
                     {
@@ -395,8 +395,18 @@ public class DHRefreshAASController
                         if (op != null)
                         {
                             _progressTracking.StartSaveChanges(op);
+                            op.LastBatchIndex = diagnostic.BatchIndex;
+                            op.LastBatchTables = diagnostic.Tables.ToList();
+                            op.LastBatchError = diagnostic.ErrorMessage;
+                            op.LastBatchFailureCategory = diagnostic.FailureCategory;
+                            op.LastBatchFailureSource = diagnostic.FailureSource;
                             await _operationStorage.UpsertOperationAsync(op);
-                            logger.LogInformation("Operation {OperationId} entering SaveChanges phase", operationId);
+                            logger.LogInformation(
+                                "Operation {OperationId} entering SaveChanges phase for batch {BatchIndex}/{TotalBatches}: {Tables}",
+                                operationId,
+                                diagnostic.BatchIndex,
+                                diagnostic.TotalBatches,
+                                string.Join(", ", diagnostic.Tables));
                         }
                     });
                 });
@@ -418,6 +428,14 @@ public class DHRefreshAASController
                     if (!result.IsSuccess)
                     {
                         op.ErrorMessage = result.Message;
+                    }
+                    if (result.LastBatchDiagnostic != null)
+                    {
+                        op.LastBatchIndex = result.LastBatchDiagnostic.BatchIndex;
+                        op.LastBatchTables = result.LastBatchDiagnostic.Tables.ToList();
+                        op.LastBatchError = result.LastBatchDiagnostic.ErrorMessage;
+                        op.LastBatchFailureCategory = result.LastBatchDiagnostic.FailureCategory;
+                        op.LastBatchFailureSource = result.LastBatchDiagnostic.FailureSource;
                     }
                     
                     // Final progress update - now we can show 100%
@@ -491,6 +509,16 @@ public class DHRefreshAASController
                 
                 result = operation.Result,
                 topSlowTables = ParseTopSlowTables(operation.Result),
+                lastBatch = operation.LastBatchIndex.HasValue
+                    ? new
+                    {
+                        index = operation.LastBatchIndex,
+                        tables = operation.LastBatchTables,
+                        error = operation.LastBatchError,
+                        failureCategory = operation.LastBatchFailureCategory,
+                        failureSource = operation.LastBatchFailureSource
+                    }
+                    : null,
                 errorMessage = operation.ErrorMessage,
                 isCompleted = operation.Status != OperationStatusEnum.Running
             };

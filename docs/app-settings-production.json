@@ -51,17 +51,37 @@
   },
   {
     "name": "AAS_SCALE_UP_SKU",
-    "value": "S9v2",
+    "value": "S4",
+    "slotSetting": false
+  },
+  {
+    "name": "AAS_ORIGINAL_SKU",
+    "value": "S2",
+    "slotSetting": false
+  },
+  {
+    "name": "AAS_RESOURCE_GROUP",
+    "value": "vn-rg-sa-sdp-solution-p",
+    "slotSetting": false
+  },
+  {
+    "name": "AAS_SERVER_NAME",
+    "value": "vnaassasdpp01",
+    "slotSetting": false
+  },
+  {
+    "name": "AAS_SUBSCRIPTION_ID",
+    "value": "8730775e-045c-47d1-a080-e3b9882cec01",
     "slotSetting": false
   },
   {
     "name": "ENABLE_AAS_AUTO_SCALING",
-    "value": "false",
+    "value": "true",
     "slotSetting": false
   },
   {
     "name": "ENABLE_ELASTIC_POOL_AUTO_SCALING",
-    "value": "false",
+    "value": "true",
     "slotSetting": false
   },
   {
@@ -95,18 +115,28 @@
     "slotSetting": false
   },
   {
+    "name": "BASE_DELAY_SECONDS",
+    "value": "30",
+    "slotSetting": false
+  },
+  {
+    "name": "CONNECTION_TIMEOUT_MINUTES",
+    "value": "10",
+    "slotSetting": false
+  },
+  {
     "name": "OPERATION_TIMEOUT_MINUTES",
     "value": "60",
     "slotSetting": false
   },
   {
     "name": "SAVE_CHANGES_BATCH_SIZE",
-    "value": "5",
+    "value": "3",
     "slotSetting": false
   },
   {
     "name": "SAVE_CHANGES_MAX_PARALLELISM",
-    "value": "8",
+    "value": "2",
     "slotSetting": false
   },
   {

@@ -47,7 +47,7 @@ public class AasRefreshService
         EnhancedPostData requestData,
         CancellationToken cancellationToken = default,
         Action<string, bool, string>? progressCallback = null,
-        Action? saveChangesCallback = null)
+        Action<SaveChangesDiagnostic>? saveChangesCallback = null)
     {
         var startTime = DateTime.UtcNow;
         _logger.LogInformation("Enhanced AAS refresh started with stability improvements.");
@@ -58,7 +58,15 @@ public class AasRefreshService
             Message = "",
             StackTrace = "",
             RefreshResults = new List<RefreshResult>(),
-            StartTime = startTime
+            StartTime = startTime,
+            ExecutionSettings = new RefreshExecutionSettings
+            {
+                OperationTimeoutMinutes = requestData.OperationTimeoutMinutes,
+                SaveChangesTimeoutMinutes = Math.Max(_config.SaveChangesTimeoutMinutes, requestData.OperationTimeoutMinutes),
+                SaveChangesBatchSize = Math.Max(1, _config.SaveChangesBatchSize),
+                SaveChangesMaxParallelism = Math.Max(1, _config.SaveChangesMaxParallelism),
+                MaxRetryAttempts = Math.Max(1, requestData.MaxRetryAttempts)
+            }
         };
 
         // Create cancellation token with timeout
@@ -87,7 +95,9 @@ public class AasRefreshService
         {
             var message = $"Operation timed out after {requestData.OperationTimeoutMinutes} minutes";
             _logger.LogError(message);
-            response.Message = message;
+            response.Message = response.LastBatchDiagnostic == null
+                ? message
+                : $"{message}. Last observed batch: {BuildBatchFailureMessage(response.LastBatchDiagnostic)}";
             response.IsSuccess = false;
             response.EndTime = DateTime.UtcNow;
             response.ExecutionTimeSeconds = (response.EndTime - response.StartTime).TotalSeconds;
@@ -113,7 +123,7 @@ public class AasRefreshService
         ActivityResponse response,
         CancellationToken cancellationToken,
         Action<string, bool, string>? progressCallback = null,
-        Action? saveChangesCallback = null)
+        Action<SaveChangesDiagnostic>? saveChangesCallback = null)
     {
         Server? asSrv = null;
         var maxAttempts = Math.Max(1, requestData.MaxRetryAttempts);
@@ -122,28 +132,32 @@ public class AasRefreshService
             requestData.OperationTimeoutMinutes,
             _config.SaveChangesTimeoutMinutes);
 
-        var retryOptions = new RetryStrategyOptions
+        var pipelineBuilder = new ResiliencePipelineBuilder();
+        if (maxAttempts > 1)
         {
-            MaxRetryAttempts = maxAttempts - 1,
-            BackoffType = DelayBackoffType.Exponential,
-            Delay = TimeSpan.FromSeconds(Math.Max(1, requestData.BaseDelaySeconds)),
-            ShouldHandle = new PredicateBuilder().Handle<Exception>(),
-            OnRetry = async args =>
+            var retryOptions = new RetryStrategyOptions
             {
-                _logger.LogWarning(
-                    args.Outcome.Exception,
-                    "Refresh attempt {Attempt} failed. Retrying in {DelaySeconds} seconds. Error: {ErrorMessage}",
-                    args.AttemptNumber + 1,
-                    args.RetryDelay.TotalSeconds,
-                    args.Outcome.Exception?.Message);
-                await _connectionService.SafeDisconnectAsync(asSrv);
-                asSrv = null;
-            }
-        };
+                MaxRetryAttempts = maxAttempts - 1,
+                BackoffType = DelayBackoffType.Exponential,
+                Delay = TimeSpan.FromSeconds(Math.Max(1, requestData.BaseDelaySeconds)),
+                ShouldHandle = new PredicateBuilder().Handle<Exception>(),
+                OnRetry = async args =>
+                {
+                    _logger.LogWarning(
+                        args.Outcome.Exception,
+                        "Refresh attempt {Attempt} failed. Retrying in {DelaySeconds} seconds. Error: {ErrorMessage}",
+                        args.AttemptNumber + 1,
+                        args.RetryDelay.TotalSeconds,
+                        args.Outcome.Exception?.Message);
+                    await _connectionService.SafeDisconnectAsync(asSrv);
+                    asSrv = null;
+                }
+            };
 
-        var pipeline = new ResiliencePipelineBuilder()
-            .AddRetry(retryOptions)
-            .Build();
+            pipelineBuilder.AddRetry(retryOptions);
+        }
+
+        var pipeline = pipelineBuilder.Build();
 
         // Auto-scale Elastic Pool BEFORE AAS (SQL needs capacity first)
         var elasticPoolScaledUp = false;
@@ -256,7 +270,7 @@ public class AasRefreshService
         ActivityResponse response,
         CancellationToken cancellationToken,
         Action<string, bool, string>? progressCallback = null,
-        Action? saveChangesCallback = null)
+        Action<SaveChangesDiagnostic>? saveChangesCallback = null)
     {
         var requestData = enhancedRequest.OriginalRequest;
 
@@ -413,19 +427,34 @@ public class AasRefreshService
                 continue;
             }
 
+            var saveTargets = batch
+                .Where(b => b.result.IsSuccess)
+                .Select(b => string.IsNullOrEmpty(b.refreshObj.Partition)
+                    ? b.refreshObj.Table!
+                    : $"{b.refreshObj.Table}::{b.refreshObj.Partition}")
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var batchDiagnostic = CreateBatchDiagnostic(
+                saveTargets,
+                batchIndex,
+                batches.Count,
+                effectiveSaveTimeoutMinutes,
+                maxParallelism);
+
             // Acquire per-database lock to prevent concurrent SaveChanges on the same AAS database
             _logger.LogInformation("Waiting for database lock on '{Database}' for batch {BatchIndex}...",
                 requestData.DatabaseName, batchIndex);
             await dbSemaphore.WaitAsync(cancellationToken);
-            bool saveSuccess;
+            SaveChangesDiagnostic saveChangesDiagnostic;
             var saveChangesStartTime = DateTime.UtcNow;
             try
             {
                 _logger.LogInformation("Acquired database lock on '{Database}' for batch {BatchIndex}",
                     requestData.DatabaseName, batchIndex);
-                saveChangesCallback?.Invoke();
-                saveSuccess = await ExecuteBatchSaveChangesAsync(
-                    model, maxParallelism, effectiveSaveTimeoutMinutes, batchIndex, batches.Count, cancellationToken);
+                response.LastBatchDiagnostic = CloneDiagnostic(batchDiagnostic);
+                saveChangesCallback?.Invoke(CloneDiagnostic(batchDiagnostic));
+                saveChangesDiagnostic = await ExecuteBatchSaveChangesAsync(model, batchDiagnostic, cancellationToken);
+                response.LastBatchDiagnostic = CloneDiagnostic(saveChangesDiagnostic);
             }
             finally
             {
@@ -433,6 +462,7 @@ public class AasRefreshService
                 _logger.LogInformation("Released database lock on '{Database}' for batch {BatchIndex}",
                     requestData.DatabaseName, batchIndex);
             }
+            var saveSuccess = saveChangesDiagnostic.IsSuccess;
 
             // Query row counts after SaveChanges
             Dictionary<string, long>? rowCounts = null;
@@ -448,7 +478,14 @@ public class AasRefreshService
             }
             else
             {
-                _logger.LogError("Batch {BatchIndex}/{BatchCount} SaveChanges failed", batchIndex, batches.Count);
+                response.LastBatchDiagnostic = saveChangesDiagnostic;
+                _logger.LogError(
+                    "Batch {BatchIndex}/{BatchCount} SaveChanges failed. Category: {FailureCategory}, Source: {FailureSource}, Error: {ErrorMessage}",
+                    batchIndex,
+                    batches.Count,
+                    saveChangesDiagnostic.FailureCategory,
+                    saveChangesDiagnostic.FailureSource,
+                    saveChangesDiagnostic.ErrorMessage);
             }
 
             // Update results for this batch
@@ -457,7 +494,7 @@ public class AasRefreshService
                 if (!saveSuccess && result.IsSuccess)
                 {
                     result.IsSuccess = false;
-                    result.ErrorMessage = $"SaveChanges failed for batch {batchIndex}";
+                    result.ErrorMessage = BuildBatchFailureMessage(saveChangesDiagnostic);
                 }
 
                 // Add row count and partition info
@@ -507,14 +544,24 @@ public class AasRefreshService
             try
             {
                 model.RequestRefresh(RefreshType.Calculate);
-                calculateSuccess = await ExecuteBatchSaveChangesAsync(model, maxParallelism, effectiveSaveTimeoutMinutes,
-                    batches.Count + 1, batches.Count + 1, cancellationToken);
+                var calculateDiagnostic = CreateBatchDiagnostic(
+                    new[] { "Model Calculate" },
+                    batches.Count + 1,
+                    batches.Count + 1,
+                    effectiveSaveTimeoutMinutes,
+                    maxParallelism);
+                response.LastBatchDiagnostic = CloneDiagnostic(calculateDiagnostic);
+                saveChangesCallback?.Invoke(CloneDiagnostic(calculateDiagnostic));
+                calculateDiagnostic = await ExecuteBatchSaveChangesAsync(model, calculateDiagnostic, cancellationToken);
+                response.LastBatchDiagnostic = CloneDiagnostic(calculateDiagnostic);
+                calculateSuccess = calculateDiagnostic.IsSuccess;
                 if (calculateSuccess)
                 {
                     _logger.LogInformation("Model Calculate completed for database '{Database}'", requestData.DatabaseName);
                 }
                 else
                 {
+                    response.LastBatchDiagnostic = calculateDiagnostic;
                     _logger.LogError("Model Calculate SaveChanges failed for database '{Database}'", requestData.DatabaseName);
                 }
             }
@@ -544,13 +591,19 @@ public class AasRefreshService
         else if (allDataSuccess && !calculateSuccess)
         {
             response.IsSuccess = false;
-            response.Message = "Data refresh succeeded but Calculate failed. Model may show 'needs to be recalculated'.";
+            response.Message = response.LastBatchDiagnostic == null
+                ? "Data refresh succeeded but Calculate failed. Model may show 'needs to be recalculated'."
+                : $"Data refresh succeeded but Calculate failed. {BuildBatchFailureMessage(response.LastBatchDiagnostic)}";
         }
         else if (!allDataSuccess)
         {
             response.IsSuccess = false;
             if (string.IsNullOrWhiteSpace(response.Message))
-                response.Message = "Some table/partition refreshes failed. See RefreshResults.";
+            {
+                response.Message = response.LastBatchDiagnostic == null
+                    ? "Some table/partition refreshes failed. See RefreshResults."
+                    : $"Some table/partition refreshes failed. {BuildBatchFailureMessage(response.LastBatchDiagnostic)}";
+            }
         }
     }
 
@@ -566,12 +619,9 @@ public class AasRefreshService
         return Task.FromResult(results);
     }
 
-    private async Task<bool> ExecuteBatchSaveChangesAsync(
+    private async Task<SaveChangesDiagnostic> ExecuteBatchSaveChangesAsync(
         Model model,
-        int maxParallelism,
-        int timeoutMinutes,
-        int batchIndex,
-        int totalBatches,
+        SaveChangesDiagnostic diagnostic,
         CancellationToken cancellationToken)
     {
         const int maxRetries = 3;
@@ -586,7 +636,7 @@ public class AasRefreshService
             {
                 _logger.LogInformation(
                     "Deadlock in batch {BatchIndex} SaveChanges. Retrying in {DelaySeconds}s (Attempt {Attempt}/{MaxAttempts})",
-                    batchIndex, args.RetryDelay.TotalSeconds, args.AttemptNumber + 2, maxRetries + 1);
+                    diagnostic.BatchIndex, args.RetryDelay.TotalSeconds, args.AttemptNumber + 2, maxRetries + 1);
                 return ValueTask.CompletedTask;
             }
         };
@@ -595,41 +645,236 @@ public class AasRefreshService
             .AddRetry(saveRetryOptions)
             .Build();
 
-        using var saveTimeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(timeoutMinutes));
+        using var saveTimeoutCts = new CancellationTokenSource(TimeSpan.FromMinutes(diagnostic.SaveChangesTimeoutMinutes));
         using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, saveTimeoutCts.Token);
 
         try
         {
             _logger.LogInformation(
-                "Batch {BatchIndex}/{TotalBatches} SaveChanges starting (timeout: {Timeout}min, parallelism: {Parallelism})",
-                batchIndex, totalBatches, timeoutMinutes, maxParallelism);
+                "Batch {BatchIndex}/{TotalBatches} SaveChanges starting (timeout: {Timeout}min, parallelism: {Parallelism}). Targets: {Tables}",
+                diagnostic.BatchIndex,
+                diagnostic.TotalBatches,
+                diagnostic.SaveChangesTimeoutMinutes,
+                diagnostic.MaxParallelism,
+                string.Join(", ", diagnostic.Tables));
 
             await savePipeline.ExecuteAsync(async token =>
             {
                 await Task.Run(() =>
                 {
                     token.ThrowIfCancellationRequested();
-                    model.SaveChanges(new SaveOptions { MaxParallelism = maxParallelism });
+                    model.SaveChanges(new SaveOptions { MaxParallelism = diagnostic.MaxParallelism });
                 }, token);
             }, combinedCts.Token);
 
-            return true;
+            diagnostic.IsSuccess = true;
+            return diagnostic;
         }
-        catch (OperationCanceledException) when (saveTimeoutCts.Token.IsCancellationRequested)
+        catch (OperationCanceledException ex) when (saveTimeoutCts.Token.IsCancellationRequested)
         {
-            _logger.LogError("Batch {BatchIndex} SaveChanges timed out after {Timeout} minutes", batchIndex, timeoutMinutes);
-            return false;
+            PopulateFailureDiagnostic(
+                diagnostic,
+                ex,
+                $"SaveChanges timed out after {diagnostic.SaveChangesTimeoutMinutes} minutes. The underlying server-side command may still be running.",
+                timedOut: true,
+                canceled: false);
+            _logger.LogError(
+                ex,
+                "Batch {BatchIndex} SaveChanges timed out after {Timeout} minutes. Targets: {Tables}",
+                diagnostic.BatchIndex,
+                diagnostic.SaveChangesTimeoutMinutes,
+                string.Join(", ", diagnostic.Tables));
+            return diagnostic;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException ex)
         {
-            _logger.LogError("Batch {BatchIndex} SaveChanges was canceled", batchIndex);
-            return false;
+            PopulateFailureDiagnostic(
+                diagnostic,
+                ex,
+                "SaveChanges was canceled by the host or shutdown token before completion.",
+                timedOut: false,
+                canceled: true);
+            _logger.LogError(
+                ex,
+                "Batch {BatchIndex} SaveChanges was canceled. Targets: {Tables}",
+                diagnostic.BatchIndex,
+                string.Join(", ", diagnostic.Tables));
+            return diagnostic;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Batch {BatchIndex} SaveChanges failed: {ErrorMessage}", batchIndex, ex.Message);
-            return false;
+            PopulateFailureDiagnostic(
+                diagnostic,
+                ex,
+                ex.Message,
+                timedOut: false,
+                canceled: false);
+            _logger.LogError(
+                ex,
+                "Batch {BatchIndex} SaveChanges failed. Category: {FailureCategory}, Source: {FailureSource}, Targets: {Tables}, Error: {ErrorMessage}",
+                diagnostic.BatchIndex,
+                diagnostic.FailureCategory,
+                diagnostic.FailureSource,
+                string.Join(", ", diagnostic.Tables),
+                diagnostic.ErrorMessage);
+            return diagnostic;
         }
+    }
+
+    private static SaveChangesDiagnostic CreateBatchDiagnostic(
+        IEnumerable<string> tables,
+        int batchIndex,
+        int totalBatches,
+        int timeoutMinutes,
+        int maxParallelism)
+    {
+        return new SaveChangesDiagnostic
+        {
+            BatchIndex = batchIndex,
+            TotalBatches = totalBatches,
+            Tables = tables.Where(t => !string.IsNullOrWhiteSpace(t)).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+            SaveChangesTimeoutMinutes = timeoutMinutes,
+            MaxParallelism = maxParallelism
+        };
+    }
+
+    private static SaveChangesDiagnostic CloneDiagnostic(SaveChangesDiagnostic diagnostic)
+    {
+        return new SaveChangesDiagnostic
+        {
+            BatchIndex = diagnostic.BatchIndex,
+            TotalBatches = diagnostic.TotalBatches,
+            Tables = diagnostic.Tables.ToList(),
+            SaveChangesTimeoutMinutes = diagnostic.SaveChangesTimeoutMinutes,
+            MaxParallelism = diagnostic.MaxParallelism,
+            IsSuccess = diagnostic.IsSuccess,
+            ErrorMessage = diagnostic.ErrorMessage,
+            ExceptionType = diagnostic.ExceptionType,
+            FailureCategory = diagnostic.FailureCategory,
+            FailureSource = diagnostic.FailureSource,
+            MatchedSignals = diagnostic.MatchedSignals.ToList()
+        };
+    }
+
+    private static string BuildBatchFailureMessage(SaveChangesDiagnostic diagnostic)
+    {
+        var source = string.IsNullOrWhiteSpace(diagnostic.FailureSource) ? "UnknownSource" : diagnostic.FailureSource;
+        var category = string.IsNullOrWhiteSpace(diagnostic.FailureCategory) ? "UnknownCategory" : diagnostic.FailureCategory;
+        var details = string.IsNullOrWhiteSpace(diagnostic.ErrorMessage)
+            ? "No inner SaveChanges error details were surfaced."
+            : diagnostic.ErrorMessage;
+        return $"SaveChanges failed for batch {diagnostic.BatchIndex}/{diagnostic.TotalBatches} [{source}/{category}]: {details}";
+    }
+
+    private static void PopulateFailureDiagnostic(
+        SaveChangesDiagnostic diagnostic,
+        Exception? exception,
+        string fallbackMessage,
+        bool timedOut,
+        bool canceled)
+    {
+        diagnostic.IsSuccess = false;
+        diagnostic.ExceptionType = exception?.GetType().Name;
+        diagnostic.ErrorMessage = string.IsNullOrWhiteSpace(exception?.Message)
+            ? fallbackMessage
+            : FlattenExceptionMessages(exception!);
+
+        var (category, source, signals) = AnalyzeSaveChangesFailure(exception, diagnostic.ErrorMessage, timedOut, canceled);
+        diagnostic.FailureCategory = category;
+        diagnostic.FailureSource = source;
+        diagnostic.MatchedSignals = signals;
+    }
+
+    private static (string Category, string Source, List<string> Signals) AnalyzeSaveChangesFailure(
+        Exception? exception,
+        string? message,
+        bool timedOut,
+        bool canceled)
+    {
+        var combined = $"{message} {exception}".ToLowerInvariant();
+        var signals = new List<string>();
+
+        if (timedOut)
+        {
+            signals.Add("save-changes-timeout");
+            return ("Timeout", "Unknown", signals);
+        }
+
+        if (canceled)
+        {
+            signals.Add("operation-canceled");
+            return ("Canceled", "Unknown", signals);
+        }
+
+        if (combined.Contains("deadlock"))
+        {
+            signals.Add("deadlock");
+            return ("Deadlock", "Unknown", signals);
+        }
+
+        if (combined.Contains("long running xmla request") ||
+            combined.Contains("service upgrade") ||
+            combined.Contains("server restart") ||
+            combined.Contains("stuck without any updates") ||
+            combined.Contains("internal service issue") ||
+            combined.Contains("analysis services") ||
+            combined.Contains("asazure"))
+        {
+            if (combined.Contains("long running xmla request")) signals.Add("xmla-request-interrupted");
+            if (combined.Contains("service upgrade")) signals.Add("service-upgrade");
+            if (combined.Contains("server restart")) signals.Add("server-restart");
+            if (combined.Contains("stuck without any updates")) signals.Add("stuck-without-updates");
+            return ("ServiceRestartOrNodeMove", "AAS", signals);
+        }
+
+        if (combined.Contains("out of memory") ||
+            combined.Contains("memory error") ||
+            combined.Contains("resource governing") ||
+            combined.Contains("qpu") ||
+            combined.Contains("capacity"))
+        {
+            if (combined.Contains("out of memory")) signals.Add("out-of-memory");
+            if (combined.Contains("memory error")) signals.Add("memory-error");
+            if (combined.Contains("resource governing")) signals.Add("resource-governing");
+            return ("CapacityOrMemory", "AAS", signals);
+        }
+
+        if (combined.Contains("sql") ||
+            combined.Contains("ole db") ||
+            combined.Contains("odbc") ||
+            combined.Contains("provider") ||
+            combined.Contains("timeout expired") ||
+            combined.Contains("transport-level error") ||
+            combined.Contains("tcp provider") ||
+            combined.Contains("login failed") ||
+            combined.Contains("semaphore timeout period has expired") ||
+            combined.Contains("network-related") ||
+            combined.Contains("a network-related"))
+        {
+            if (combined.Contains("timeout expired")) signals.Add("sql-timeout");
+            if (combined.Contains("login failed")) signals.Add("sql-login-failed");
+            if (combined.Contains("transport-level error")) signals.Add("sql-transport-error");
+            if (combined.Contains("tcp provider")) signals.Add("sql-tcp-provider");
+            return ("DataSourceOrConnectivity", "AzureSQLOrDataSource", signals);
+        }
+
+        return ("Unknown", "Unknown", signals);
+    }
+
+    private static string FlattenExceptionMessages(Exception exception)
+    {
+        var messages = new List<string>();
+        for (var current = exception; current != null; current = current.InnerException)
+        {
+            if (!string.IsNullOrWhiteSpace(current.Message))
+            {
+                messages.Add(current.Message.Trim());
+            }
+        }
+
+        return messages.Count == 0
+            ? exception.GetType().Name
+            : string.Join(" --> ", messages.Distinct(StringComparer.Ordinal));
     }
 
     /// <summary>

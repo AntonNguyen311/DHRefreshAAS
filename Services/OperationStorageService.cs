@@ -39,6 +39,11 @@ public class OperationEntity : ITableEntity
     public string FailedTablesJson { get; set; } = "[]";
     public string InProgressTablesJson { get; set; } = "[]";
     public string CurrentPhase { get; set; } = "Initializing";
+    public int? LastBatchIndex { get; set; }
+    public string LastBatchTablesJson { get; set; } = "[]";
+    public string? LastBatchError { get; set; }
+    public string? LastBatchFailureCategory { get; set; }
+    public string? LastBatchFailureSource { get; set; }
     
     public OperationEntity() { }
     
@@ -62,6 +67,11 @@ public class OperationEntity : ITableEntity
         FailedTablesJson = JsonSerializer.Serialize(operation.FailedTables);
         InProgressTablesJson = JsonSerializer.Serialize(operation.InProgressTables);
         CurrentPhase = operation.CurrentPhase;
+        LastBatchIndex = operation.LastBatchIndex;
+        LastBatchTablesJson = JsonSerializer.Serialize(operation.LastBatchTables);
+        LastBatchError = operation.LastBatchError;
+        LastBatchFailureCategory = operation.LastBatchFailureCategory;
+        LastBatchFailureSource = operation.LastBatchFailureSource;
     }
     
     public OperationStatus ToOperationStatus()
@@ -83,7 +93,12 @@ public class OperationEntity : ITableEntity
             CompletedTables = JsonSerializer.Deserialize<List<string>>(CompletedTablesJson) ?? new List<string>(),
             FailedTables = JsonSerializer.Deserialize<List<string>>(FailedTablesJson) ?? new List<string>(),
             InProgressTables = JsonSerializer.Deserialize<List<string>>(InProgressTablesJson) ?? new List<string>(),
-            CurrentPhase = CurrentPhase
+            CurrentPhase = CurrentPhase,
+            LastBatchIndex = LastBatchIndex,
+            LastBatchTables = JsonSerializer.Deserialize<List<string>>(LastBatchTablesJson) ?? new List<string>(),
+            LastBatchError = LastBatchError,
+            LastBatchFailureCategory = LastBatchFailureCategory,
+            LastBatchFailureSource = LastBatchFailureSource
         };
     }
 }

@@ -54,6 +54,21 @@ public class OperationStatus
     
     [JsonPropertyName("currentPhase")]
     public string CurrentPhase { get; set; } = "Initializing";
+
+    [JsonPropertyName("lastBatchIndex")]
+    public int? LastBatchIndex { get; set; }
+
+    [JsonPropertyName("lastBatchTables")]
+    public List<string> LastBatchTables { get; set; } = new();
+
+    [JsonPropertyName("lastBatchError")]
+    public string? LastBatchError { get; set; }
+
+    [JsonPropertyName("lastBatchFailureCategory")]
+    public string? LastBatchFailureCategory { get; set; }
+
+    [JsonPropertyName("lastBatchFailureSource")]
+    public string? LastBatchFailureSource { get; set; }
     
     /// <summary>
     /// Seeds in-progress table names for <c>ProgressTrackingService.InitializeProgress</c>; omitted from JSON via <see cref="JsonIgnoreAttribute"/>.

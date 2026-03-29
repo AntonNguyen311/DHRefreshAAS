@@ -221,13 +221,19 @@ public class DHRefreshAASControllerTests
         var mockRequest = CreateMockHttpRequest();
         var mockContext = CreateMockFunctionContext();
         var operationId = "test-operation-id";
+        object? responsePayload = null;
         var operationStatus = new OperationStatus
         {
             OperationId = operationId,
             Status = OperationStatusEnum.Running,
             StartTime = DateTime.UtcNow,
             TablesCount = 5,
-            TablesCompleted = 3
+            TablesCompleted = 3,
+            LastBatchIndex = 2,
+            LastBatchTables = new List<string> { "TableA", "TableB" },
+            LastBatchError = "Batch failed",
+            LastBatchFailureCategory = "DataSourceOrConnectivity",
+            LastBatchFailureSource = "AzureSQLOrDataSource"
         };
 
         // Mock query string parsing
@@ -240,6 +246,7 @@ public class DHRefreshAASControllerTests
         var mockStatusResponse = CreateMockHttpResponse(HttpStatusCode.OK);
         _mockResponseService
             .Setup(x => x.CreateStatusResponseAsync(It.IsAny<HttpRequestData>(), It.IsAny<object>()))
+            .Callback<HttpRequestData, object>((_, payload) => responsePayload = payload)
             .ReturnsAsync(mockStatusResponse);
 
         // Act
@@ -249,6 +256,18 @@ public class DHRefreshAASControllerTests
         Assert.Equal(HttpStatusCode.OK, result.StatusCode);
         _mockOperationStorage.Verify(x => x.GetOperationAsync(operationId), Times.Once);
         _mockProgressTracking.Verify(x => x.UpdateProgress(operationStatus), Times.Once);
+        Assert.NotNull(responsePayload);
+
+        var json = JsonSerializer.Serialize(responsePayload);
+        using var doc = JsonDocument.Parse(json);
+        var lastBatch = doc.RootElement.GetProperty("lastBatch");
+        Assert.Equal(2, lastBatch.GetProperty("index").GetInt32());
+        Assert.Equal(2, lastBatch.GetProperty("tables").GetArrayLength());
+        Assert.Equal("TableA", lastBatch.GetProperty("tables")[0].GetString());
+        Assert.Equal("TableB", lastBatch.GetProperty("tables")[1].GetString());
+        Assert.Equal("Batch failed", lastBatch.GetProperty("error").GetString());
+        Assert.Equal("DataSourceOrConnectivity", lastBatch.GetProperty("failureCategory").GetString());
+        Assert.Equal("AzureSQLOrDataSource", lastBatch.GetProperty("failureSource").GetString());
     }
 
     [Fact]

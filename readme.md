@@ -17,6 +17,14 @@ Triggers use `AuthorizationLevel.Function`; callers must supply the function key
 
 Application settings are read via `ConfigurationService` (see `Services/ConfigurationService.cs`). Typical keys include `AAS_SERVER_URL`, `AAS_DATABASE`, `AAS_AUTH_MODE`, credentials for Service Principal or User/Password, and retry/timeout settings such as `MAX_RETRY_ATTEMPTS`, `OPERATION_TIMEOUT_MINUTES`. **`operationTimeoutMinutes`** in the refresh POST body sets both the overall cancellation budget and the minimum **SaveChanges** wait (together with **`connectionTimeoutMinutes`**, which drives MSOLAP **Connect Timeout**; **Command Timeout** is derived from the larger of operation and `SAVE_CHANGES_TIMEOUT_MINUTES`, capped at two hours). Use Key Vault references or secure app settings in Azure; keep secrets out of source control.
 
+For the current bottleneck profile, start from this safer operational baseline:
+
+- `SAVE_CHANGES_BATCH_SIZE = 3`
+- `SAVE_CHANGES_MAX_PARALLELISM = 2`
+- Logic App `Foreach` concurrency = `1`
+- `ENABLE_ELASTIC_POOL_AUTO_SCALING = true`
+- production baseline in `docs/app-settings-production.json` enables `ENABLE_AAS_AUTO_SCALING = true` with `AAS_SCALE_UP_SKU = S4`
+
 ## Dependency injection
 
 `Program.cs` registers: `ConfigurationService`, `ConnectionService`, `AasRefreshService` (singleton), `OperationStorageService`, `ProgressTrackingService`, `ErrorHandlingService`, `RequestProcessingService`, `ResponseService`, and `DHRefreshAASController`.

@@ -30,4 +30,10 @@ public class ActivityResponse
 
     [JsonPropertyName("topSlowTables")]
     public List<RefreshResult>? TopSlowTables { get; set; }
+
+    [JsonPropertyName("executionSettings")]
+    public RefreshExecutionSettings? ExecutionSettings { get; set; }
+
+    [JsonPropertyName("lastBatchDiagnostic")]
+    public SaveChangesDiagnostic? LastBatchDiagnostic { get; set; }
 }

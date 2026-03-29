@@ -88,6 +88,25 @@ public class AasRefreshServiceTests
         Assert.Contains("Persistent connection failure", result.Message);
     }
 
+    [Fact]
+    public async Task ExecuteRefreshWithRetryAsync_SingleRetryAttempt_ReturnsFailureWithoutPolicyValidationError()
+    {
+        var requestData = CreateValidEnhancedPostData();
+        requestData.MaxRetryAttempts = 1;
+
+        _mockConnectionService
+            .Setup(x => x.CreateServerConnectionAsync(It.IsAny<CancellationToken>(), It.IsAny<int>(), It.IsAny<int>()))
+            .ThrowsAsync(new Exception("Single-attempt connection failure"));
+
+        var result = await _service.ExecuteRefreshWithRetryAsync(requestData, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.False(result.IsSuccess);
+        Assert.Contains("All retry attempts failed", result.Message);
+        Assert.Contains("Single-attempt connection failure", result.Message);
+        Assert.DoesNotContain("Attempt count must be greater than zero", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static EnhancedPostData CreateValidEnhancedPostData()
     {
         var postData = new PostData
