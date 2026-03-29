@@ -91,10 +91,10 @@ That means cross-environment data source routing is part of the production risk 
 
 ### Logic App concurrency
 
-The workflow definition still runs cube refreshes in parallel:
+The current live baseline keeps cube refreshes serialized inside the workflow:
 
 - `docs/LogicApp_RefreshCube_Workflow.json`
-- `runtimeConfiguration.concurrency.repetitions = 4`
+- `runtimeConfiguration.concurrency.repetitions = 1`
 
 ### Function host timeout
 
@@ -123,6 +123,36 @@ Then the effective behavior is:
 - effective `SaveChanges` timeout = `60`, not `15`
 
 The checked-in reference file `docs/app-settings-production.json` has been updated to the safer baseline (`SAVE_CHANGES_BATCH_SIZE = 3`, `SAVE_CHANGES_MAX_PARALLELISM = 2`, SQL auto-scaling enabled), but always verify the live Azure app settings before tuning.
+
+## Post-hotfix observations
+
+- `RefreshCube_UAT` was revalidated after reintroducing `MaxRowsPerRun` through a pre-aggregated `changedRows` CTE:
+  - mapped-change run `08584268132096677854381144049CU58` succeeded;
+  - no-payload run `08584268119312186463939749743CU57` skipped safely without calling `DHRefreshAAS_HttpStart`.
+- `RefreshCube` was revalidated on prod with run `08584268116075162255161193967CU37`, and `Get_AAS_Model_Tables_JSON_Format`, `DHRefreshAAS_HttpStart`, and `Append_Database_Result` all succeeded.
+- The safe query pattern is now:
+  - aggregate source deltas once in `changedRows`;
+  - join `changedRows` into `candidate`;
+  - evaluate `MaxRowsPerRun` from the pre-aggregated column instead of using aggregate expressions inline inside `CASE`.
+- The shortlist guardrail metadata now carries:
+  - `MaxRowsPerRun = 500000`;
+  - `GuardrailType = MaxRowsPerRun`;
+  - default owner/fix guidance;
+  - `RequirePartition = 1` for rows that already have explicit partition mappings.
+- A SQL policy-driven pilot was added for `RefreshCube_UAT`:
+  - `docs/migration_add_CubeRefreshPolicy.sql` adds policy columns plus `etl.cuberefreshnotificationpolicy`;
+  - warning/failure recipients are now resolved from SQL policy rows first, with table-owner and emergency fallback only if policy rows do not match;
+  - cube ordering in `Get_List_CubeName` is now driven by `RefreshWave` and `RefreshPriority`.
+
+## Safe rollback rule
+
+If a future preflight edit causes `Get_AAS_Model_Tables_JSON_Format` to fail again:
+
+- immediately revert the query shape to the current `changedRows -> candidate` pattern used in:
+  - `docs/LogicApp_RefreshCube_Workflow.json`
+  - `docs/LogicApp_RefreshCube_UAT_Workflow.json`
+  - `docs/LogicApp_RefreshCubeNew_Workflow.json`
+- do not reintroduce inline aggregate checks such as `MAX(etlLog.ChangedRowCount)` inside `candidate` `CASE` expressions.
 
 ## Why the old diagnostics were insufficient
 

@@ -25,6 +25,10 @@ For the current bottleneck profile, start from this safer operational baseline:
 - `ENABLE_ELASTIC_POOL_AUTO_SCALING = true`
 - production baseline in `docs/app-settings-production.json` enables `ENABLE_AAS_AUTO_SCALING = true` with `AAS_SCALE_UP_SKU = S4`
 
+For `MaxRowsPerRun`, use the current preflight pattern from `docs/LogicApp_RefreshCube_Workflow.json` and `docs/LogicApp_RefreshCube_UAT_Workflow.json`: compute row deltas in a separate `changedRows` CTE first, then join them into `candidate`. Do not put aggregate expressions such as `MAX(etlLog.ChangedRowCount)` directly inside the `candidate` guardrail `CASE` logic; that query shape previously broke the Logic App SQL connector.
+
+For the SQL policy-driven pilot, `docs/migration_add_CubeRefreshPolicy.sql` adds table-level policy metadata (`PolicyGroup`, `RefreshWave`, `RefreshPriority`, `TableOwnerRecipients`) plus `etl.cuberefreshnotificationpolicy` for warning/failure recipient routing. `RefreshCube_UAT` is the first workflow using this contract so recipient changes can be made in SQL without editing Logic App email expressions.
+
 ## Dependency injection
 
 `Program.cs` registers: `ConfigurationService`, `ConnectionService`, `AasRefreshService` (singleton), `OperationStorageService`, `ProgressTrackingService`, `ErrorHandlingService`, `RequestProcessingService`, `ResponseService`, and `DHRefreshAASController`.
