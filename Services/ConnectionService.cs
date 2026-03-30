@@ -400,6 +400,45 @@ public class ConnectionService
     }
 
     /// <summary>
+    /// Wait until the AAS server accepts connections (any database).
+    /// Use after scale operations to avoid "server starting" errors.
+    /// </summary>
+    public virtual async Task<bool> WaitForServerReadyAsync(CancellationToken cancellationToken, int maxRetries = 18, int delaySeconds = 10)
+    {
+        _logger.LogInformation("Probing AAS server readiness (max {MaxWait}s)...", maxRetries * delaySeconds);
+
+        for (int i = 0; i < maxRetries; i++)
+        {
+            Server? server = null;
+            try
+            {
+                server = new Server();
+                var connectionString = BuildConnectionString(connectTimeoutSeconds: 15, commandTimeoutSeconds: 15);
+                await Task.Run(() => server.Connect(connectionString), cancellationToken);
+
+                if (server.Connected)
+                {
+                    _logger.LogInformation("AAS server ready (attempt {Attempt}/{Max})", i + 1, maxRetries);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Server readiness probe attempt {Attempt}/{Max}: {Message}", i + 1, maxRetries, ex.Message);
+            }
+            finally
+            {
+                await SafeDisconnectAsync(server);
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
+        }
+
+        _logger.LogWarning("AAS server readiness probe timed out after {MaxWait}s", maxRetries * delaySeconds);
+        return false;
+    }
+
+    /// <summary>
     /// Safely disconnect from server with error handling
     /// </summary>
     public virtual async Task SafeDisconnectAsync(Server? server)

@@ -195,6 +195,10 @@ public class AasRefreshService
         {
             await pipeline.ExecuteAsync(async token =>
             {
+                // Probe server readiness before attempting the real connection
+                // (covers the gap between ARM provisioning state=Succeeded and AAS engine accepting connections)
+                await _connectionService.WaitForServerReadyAsync(token, maxRetries: 18, delaySeconds: 10);
+
                 _logger.LogInformation("Refresh attempt started.");
                 asSrv = await _connectionService.CreateServerConnectionAsync(token, connectSec, commandSec);
                 if (asSrv?.Connected != true)
