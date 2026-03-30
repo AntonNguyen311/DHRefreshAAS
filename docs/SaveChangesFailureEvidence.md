@@ -2,6 +2,15 @@
 
 This note captures the failure patterns observed while diagnosing recurring `SaveChanges` issues in `DHRefreshAAS`.
 
+Use this file for:
+
+- root cause evidence
+- failure pattern history
+- important validation run IDs
+- rollback guidance for preflight SQL changes
+
+For the overall project/session restart view, start with `docs/ProjectSessionResume.md`.
+
 ## Recent Operation IDs
 
 These operations were inspected through `DHRefreshAAS_Status` and the `OperationStatus` Azure Table:
@@ -143,6 +152,20 @@ The checked-in reference file `docs/app-settings-production.json` has been updat
   - `docs/migration_add_CubeRefreshPolicy.sql` adds policy columns plus `etl.cuberefreshnotificationpolicy`;
   - warning/failure recipients are now resolved from SQL policy rows first, with table-owner and emergency fallback only if policy rows do not match;
   - cube ordering in `Get_List_CubeName` is now driven by `RefreshWave` and `RefreshPriority`.
+- The SQL policy-driven model was later promoted to `RefreshCube` on prod:
+  - controlled run `08584268018430812336637589863CU07` succeeded after promotion;
+  - warning/failure recipient resolution on prod now follows SQL policy first, then owner fallback, then emergency fallback.
+
+## Queue hardening
+
+To reduce refresh overlap against the shared AAS server:
+
+- `DHRefreshAAS_HttpStart` now persists requests into a global queue scope for `vnaassasdpp01` before starting work;
+- only one queued request can hold the active execution lease at a time;
+- later requests remain in `queued` state instead of racing into overlapping AAS execution;
+- zombie/shutdown cleanup now releases queue leases so a stale runner does not block the next request forever.
+
+This does not change the underlying `SaveChanges` engine behavior, but it reduces one major trigger for transient `server is starting but not ready yet` failures: overlapping refresh orchestration against the same AAS instance.
 
 ## Safe rollback rule
 

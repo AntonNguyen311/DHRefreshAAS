@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Net;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Web;
 using Microsoft.Azure.Functions.Worker;
@@ -337,31 +338,85 @@ public class DHRefreshAASController
         ILogger logger)
     {
         var operationId = Guid.NewGuid().ToString();
-        logger.LogInformation("Starting background refresh operation with ID: {OperationId}", operationId);
+        var queueScope = BuildQueueScope();
+        var enqueuedTime = DateTime.UtcNow;
+        logger.LogInformation("Queueing refresh operation {OperationId} in scope {QueueScope}", operationId, queueScope);
         
-        // Track operation status
         var operationStatus = new OperationStatus
         {
             OperationId = operationId,
-            Status = OperationStatusEnum.Running,
-            StartTime = DateTime.UtcNow,
+            Status = OperationStatusEnum.Queued,
+            EnqueuedTime = enqueuedTime,
+            StartTime = enqueuedTime,
             TablesCount = requestData.RefreshObjects?.Length ?? 0,
             EstimatedDurationMinutes = estimatedDurationMinutes,
-            RefreshObjects = requestData.RefreshObjects
+            RefreshObjects = requestData.RefreshObjects,
+            QueueScope = queueScope,
+            CurrentPhase = OperationPhaseEnum.Queued,
+            RequestPayloadJson = JsonSerializer.Serialize(enhancedRequestData)
         };
-        
-        // Initialize progress tracking
-        _progressTracking.InitializeProgress(operationStatus);
-        
+
         await _operationStorage.UpsertOperationAsync(operationStatus);
-        
-        // Start background task with progress tracking
+
+        var startedOperationId = await TryStartNextQueuedOperationAsync(logger);
+        var queuePosition = await _operationStorage.GetQueuePositionAsync(operationId);
+        var startedImmediately = string.Equals(startedOperationId, operationId, StringComparison.Ordinal);
+        var acceptedMessage = startedImmediately
+            ? "Refresh operation started in background. Use status endpoint to monitor progress."
+            : "Refresh request queued behind another active refresh. Use status endpoint to monitor progress and queue position.";
+
+        return await _responseService.CreateAcceptedResponseAsync(
+            req,
+            operationId,
+            estimatedDurationMinutes,
+            startedImmediately ? OperationStatusEnum.Running : OperationStatusEnum.Queued,
+            acceptedMessage,
+            queuePosition,
+            queueScope);
+    }
+
+    private void StartQueuedOperationExecution(string operationId, ILogger logger)
+    {
         _cleanupService.TrackOperation(operationId);
         _ = Task.Run(async () =>
         {
+            var leaseHeartbeatCts = new CancellationTokenSource();
+            Task? heartbeatTask = null;
+            OperationStatus? operation = null;
             try
             {
-                // Create progress callback to update operation status
+                operation = await _operationStorage.GetOperationAsync(operationId);
+                if (operation == null)
+                {
+                    logger.LogWarning("Queued operation {OperationId} could not be loaded for execution", operationId);
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(operation.RequestPayloadJson))
+                {
+                    await _operationStorage.MarkOperationAsFailedAsync(operationId, "Queued request payload missing; cannot execute refresh.");
+                    return;
+                }
+
+                var enhancedRequestData = JsonSerializer.Deserialize<EnhancedPostData>(operation.RequestPayloadJson);
+                if (enhancedRequestData?.OriginalRequest == null)
+                {
+                    await _operationStorage.MarkOperationAsFailedAsync(operationId, "Queued request payload is invalid; cannot execute refresh.");
+                    return;
+                }
+
+                operation.RefreshObjects = enhancedRequestData.OriginalRequest.RefreshObjects;
+                operation.CurrentPhase = OperationPhaseEnum.Initializing;
+                _progressTracking.InitializeProgress(operation);
+                await _operationStorage.UpsertOperationAsync(operation);
+
+                heartbeatTask = StartQueueLeaseHeartbeatAsync(
+                    operation.QueueScope,
+                    operation.LeaseOwner,
+                    operation.OperationId,
+                    leaseHeartbeatCts.Token,
+                    logger);
+
                 var progressCallback = new Action<string, bool, string>((tableName, isSuccess, errorMessage) =>
                 {
                     _ = Task.Run(async () =>
@@ -466,34 +521,111 @@ public class DHRefreshAASController
             }
             finally
             {
+                leaseHeartbeatCts.Cancel();
+                if (heartbeatTask != null)
+                {
+                    try
+                    {
+                        await heartbeatTask;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+                }
+
+                if (operation != null)
+                {
+                    await _operationStorage.ReleaseQueueLeaseForOperationAsync(operation.OperationId);
+                }
+
                 _cleanupService.UntrackOperation(operationId);
+                await TryStartNextQueuedOperationAsync(logger);
             }
         });
-        
-        return await _responseService.CreateAcceptedResponseAsync(req, operationId, estimatedDurationMinutes);
     }
+
+    private async Task<string?> TryStartNextQueuedOperationAsync(ILogger logger)
+    {
+        var queueScope = BuildQueueScope();
+        var leaseOwner = Guid.NewGuid().ToString("N");
+        if (!await _operationStorage.TryAcquireQueueLeaseAsync(queueScope, leaseOwner, GetQueueLeaseStaleAfter()))
+        {
+            return null;
+        }
+
+        var claimedOperationId = await _operationStorage.TryPromoteNextQueuedOperationAsync(queueScope, leaseOwner);
+        if (string.IsNullOrWhiteSpace(claimedOperationId))
+        {
+            await _operationStorage.ReleaseQueueLeaseAsync(queueScope, leaseOwner);
+            return null;
+        }
+
+        logger.LogInformation("Claimed queued refresh operation {OperationId} for execution", claimedOperationId);
+        StartQueuedOperationExecution(claimedOperationId, logger);
+        return claimedOperationId;
+    }
+
+    private async Task StartQueueLeaseHeartbeatAsync(
+        string queueScope,
+        string? leaseOwner,
+        string operationId,
+        CancellationToken cancellationToken,
+        ILogger logger)
+    {
+        if (string.IsNullOrWhiteSpace(leaseOwner))
+        {
+            return;
+        }
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(Math.Max(5, _config.HeartbeatIntervalSeconds)), cancellationToken);
+            var renewed = await _operationStorage.RenewQueueLeaseAsync(queueScope, leaseOwner, operationId, cancellationToken);
+            if (!renewed)
+            {
+                logger.LogWarning("Queue lease heartbeat could not be renewed for operation {OperationId}", operationId);
+                return;
+            }
+        }
+    }
+
+    private string BuildQueueScope() => $"aas:{_config.AasServerName}".ToLowerInvariant();
+
+    private TimeSpan GetQueueLeaseStaleAfter() =>
+        TimeSpan.FromMinutes(Math.Max(_config.ZombieTimeoutMinutes, _config.OperationTimeoutMinutes) + 5);
 
     private async Task<HttpResponseData> GetSpecificOperationStatus(string operationId, HttpRequestData req)
     {
         var operation = await _operationStorage.GetOperationAsync(operationId);
         if (operation != null)
         {
+            var referenceStart = string.Equals(operation.Status, OperationStatusEnum.Queued, StringComparison.OrdinalIgnoreCase)
+                ? operation.EnqueuedTime
+                : operation.StartTime;
             var elapsedMinutes = operation.EndTime.HasValue 
-                ? (operation.EndTime.Value - operation.StartTime).TotalMinutes
-                : (DateTime.UtcNow - operation.StartTime).TotalMinutes;
+                ? (operation.EndTime.Value - referenceStart).TotalMinutes
+                : (DateTime.UtcNow - referenceStart).TotalMinutes;
                 
             // Update progress before returning
             _progressTracking.UpdateProgress(operation);
+            var queuePosition = await _operationStorage.GetQueuePositionAsync(operationId);
             
             var statusData = new
             {
                 operationId = operation.OperationId,
                 status = operation.Status,
+                enqueuedTime = operation.EnqueuedTime,
                 startTime = operation.StartTime,
                 endTime = operation.EndTime,
                 elapsedMinutes = Math.Round(elapsedMinutes, 2),
                 estimatedDurationMinutes = operation.EstimatedDurationMinutes,
                 tablesCount = operation.TablesCount,
+                queue = new {
+                    scope = operation.QueueScope,
+                    position = queuePosition,
+                    leaseAcquiredTime = operation.LeaseAcquiredTime,
+                    leaseHeartbeatTime = operation.LeaseHeartbeatTime
+                },
                 
                 // Enhanced progress tracking
                 progress = new {
@@ -520,7 +652,7 @@ public class DHRefreshAASController
                     }
                     : null,
                 errorMessage = operation.ErrorMessage,
-                isCompleted = operation.Status != OperationStatusEnum.Running
+                isCompleted = operation.Status == OperationStatusEnum.Completed || operation.Status == OperationStatusEnum.Failed
             };
             
             return await _responseService.CreateStatusResponseAsync(req, statusData);
@@ -536,14 +668,22 @@ public class DHRefreshAASController
         
         var recentOperationsData = recentOperations.Select(op => {
             _progressTracking.UpdateProgress(op); // Update progress for each operation
+            var referenceStart = string.Equals(op.Status, OperationStatusEnum.Queued, StringComparison.OrdinalIgnoreCase)
+                ? op.EnqueuedTime
+                : op.StartTime;
             return new {
                 operationId = op.OperationId,
                 status = op.Status,
+                enqueuedTime = op.EnqueuedTime,
                 startTime = op.StartTime,
                 tablesCount = op.TablesCount,
                 elapsedMinutes = op.EndTime.HasValue 
-                    ? Math.Round((op.EndTime.Value - op.StartTime).TotalMinutes, 2)
-                    : Math.Round((DateTime.UtcNow - op.StartTime).TotalMinutes, 2),
+                    ? Math.Round((op.EndTime.Value - referenceStart).TotalMinutes, 2)
+                    : Math.Round((DateTime.UtcNow - referenceStart).TotalMinutes, 2),
+                queue = new {
+                    scope = op.QueueScope,
+                    leaseAcquiredTime = op.LeaseAcquiredTime
+                },
                 progress = new {
                     percentage = op.ProgressPercentage,
                     completed = op.TablesCompleted,
@@ -558,6 +698,7 @@ public class DHRefreshAASController
             timestamp = DateTime.UtcNow,
             status = "Function is running",
             totalOperations = operationCounts.total,
+            queuedOperations = operationCounts.queued,
             runningOperations = operationCounts.running,
             completedOperations = operationCounts.completed,
             failedOperations = operationCounts.failed,

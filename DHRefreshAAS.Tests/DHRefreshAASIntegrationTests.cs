@@ -47,6 +47,27 @@ public class DHRefreshAASIntegrationTests
         _mockHostLifetime = new Mock<IHostApplicationLifetime>();
         _mockHostLifetime.Setup(l => l.ApplicationStopping).Returns(CancellationToken.None);
         _mockLogger = new Mock<ILogger<DHRefreshAASController>>();
+        _mockOperationStorage
+            .Setup(x => x.TryAcquireQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        _mockOperationStorage
+            .Setup(x => x.TryPromoteNextQueuedOperationAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string?)null);
+        _mockOperationStorage
+            .Setup(x => x.GetQueuePositionAsync(It.IsAny<string>()))
+            .ReturnsAsync((int?)null);
+        _mockOperationStorage
+            .Setup(x => x.ReleaseQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mockOperationStorage
+            .Setup(x => x.ReleaseQueueLeaseForOperationAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mockOperationStorage
+            .Setup(x => x.RenewQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mockOperationStorage
+            .Setup(x => x.MarkOperationAsFailedAsync(It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(true);
 
         _controller = new DHRefreshAASController(
             _mockConfig.Object,
@@ -108,7 +129,14 @@ public class DHRefreshAASIntegrationTests
 
         var mockAcceptedResponse = CreateMockHttpResponse(HttpStatusCode.Accepted);
         _mockResponseService
-            .Setup(x => x.CreateAcceptedResponseAsync(mockRequest.Object, It.IsAny<string>(), 20))
+            .Setup(x => x.CreateAcceptedResponseAsync(
+                mockRequest.Object,
+                It.IsAny<string>(),
+                20,
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<int?>(),
+                It.IsAny<string?>()))
             .ReturnsAsync(mockAcceptedResponse);
 
         var result = await _controller.HttpStart(mockRequest.Object, mockContext.Object);
@@ -118,7 +146,6 @@ public class DHRefreshAASIntegrationTests
         _mockRequestProcessing.Verify(x => x.CreateEnhancedRequestData(requestData, _mockConfig.Object), Times.Once);
         _mockRequestProcessing.Verify(x => x.EstimateOperationDuration(requestData), Times.Once);
         _mockOperationStorage.Verify(x => x.UpsertOperationAsync(It.IsAny<OperationStatus>()), Times.Once);
-        _mockProgressTracking.Verify(x => x.InitializeProgress(It.IsAny<OperationStatus>()), Times.Once);
     }
 
     [Fact]
@@ -193,7 +220,7 @@ public class DHRefreshAASIntegrationTests
             }
         };
 
-        var operationCounts = (running: 3, completed: 10, failed: 2, total: 15);
+        var operationCounts = (queued: 1, running: 3, completed: 10, failed: 2, total: 16);
 
         _mockOperationStorage
             .Setup(x => x.GetRecentOperationsAsync(10))
@@ -345,13 +372,19 @@ public class DHRefreshAASIntegrationTests
 
         var mockAcceptedResponse = CreateMockHttpResponse(HttpStatusCode.Accepted);
         _mockResponseService
-            .Setup(x => x.CreateAcceptedResponseAsync(mockRequest.Object, It.IsAny<string>(), 15))
+            .Setup(x => x.CreateAcceptedResponseAsync(
+                mockRequest.Object,
+                It.IsAny<string>(),
+                15,
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<int?>(),
+                It.IsAny<string?>()))
             .ReturnsAsync(mockAcceptedResponse);
 
         var result = await _controller.HttpStart(mockRequest.Object, mockContext.Object);
 
         Assert.Equal(HttpStatusCode.Accepted, result.StatusCode);
-        _mockProgressTracking.Verify(x => x.InitializeProgress(It.IsAny<OperationStatus>()), Times.Once);
         _mockOperationStorage.Verify(x => x.UpsertOperationAsync(It.IsAny<OperationStatus>()), Times.Once);
     }
 
@@ -400,7 +433,14 @@ public class DHRefreshAASIntegrationTests
 
         var mockAcceptedResponse = CreateMockHttpResponse(HttpStatusCode.Accepted);
         _mockResponseService
-            .Setup(x => x.CreateAcceptedResponseAsync(mockRequest.Object, It.IsAny<string>(), 25))
+            .Setup(x => x.CreateAcceptedResponseAsync(
+                mockRequest.Object,
+                It.IsAny<string>(),
+                25,
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<int?>(),
+                It.IsAny<string?>()))
             .ReturnsAsync(mockAcceptedResponse);
 
         var result = await _controller.HttpStart(mockRequest.Object, mockContext.Object);

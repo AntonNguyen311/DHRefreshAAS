@@ -7,6 +7,7 @@ using Azure;
 using Azure.Data.Tables;
 using Microsoft.Extensions.Logging;
 using DHRefreshAAS.Models;
+using DHRefreshAAS.Enums;
 
 namespace DHRefreshAAS.Services;
 
@@ -23,12 +24,18 @@ public class OperationEntity : ITableEntity
     // Operation data
     public string OperationId { get; set; } = "";
     public string Status { get; set; } = "";
+    public DateTime EnqueuedTime { get; set; }
     public DateTime StartTime { get; set; }
     public DateTime? EndTime { get; set; }
     public string? Result { get; set; }
     public string? ErrorMessage { get; set; }
     public int TablesCount { get; set; }
     public double EstimatedDurationMinutes { get; set; }
+    public string QueueScope { get; set; } = "";
+    public string? RequestPayloadJson { get; set; }
+    public string? LeaseOwner { get; set; }
+    public DateTime? LeaseAcquiredTime { get; set; }
+    public DateTime? LeaseHeartbeatTime { get; set; }
     
     // Progress tracking
     public int TablesCompleted { get; set; } = 0;
@@ -53,12 +60,18 @@ public class OperationEntity : ITableEntity
         RowKey = operation.OperationId;
         OperationId = operation.OperationId;
         Status = operation.Status;
+        EnqueuedTime = operation.EnqueuedTime;
         StartTime = operation.StartTime;
         EndTime = operation.EndTime;
         Result = operation.Result;
         ErrorMessage = operation.ErrorMessage;
         TablesCount = operation.TablesCount;
         EstimatedDurationMinutes = operation.EstimatedDurationMinutes;
+        QueueScope = operation.QueueScope;
+        RequestPayloadJson = operation.RequestPayloadJson;
+        LeaseOwner = operation.LeaseOwner;
+        LeaseAcquiredTime = operation.LeaseAcquiredTime;
+        LeaseHeartbeatTime = operation.LeaseHeartbeatTime;
         TablesCompleted = operation.TablesCompleted;
         TablesFailed = operation.TablesFailed;
         TablesInProgress = operation.TablesInProgress;
@@ -80,12 +93,18 @@ public class OperationEntity : ITableEntity
         {
             OperationId = OperationId,
             Status = Status,
+            EnqueuedTime = EnqueuedTime,
             StartTime = StartTime,
             EndTime = EndTime,
             Result = Result,
             ErrorMessage = ErrorMessage,
             TablesCount = TablesCount,
             EstimatedDurationMinutes = EstimatedDurationMinutes,
+            QueueScope = QueueScope,
+            RequestPayloadJson = RequestPayloadJson,
+            LeaseOwner = LeaseOwner,
+            LeaseAcquiredTime = LeaseAcquiredTime,
+            LeaseHeartbeatTime = LeaseHeartbeatTime,
             TablesCompleted = TablesCompleted,
             TablesFailed = TablesFailed,
             TablesInProgress = TablesInProgress,
@@ -103,6 +122,20 @@ public class OperationEntity : ITableEntity
     }
 }
 
+internal class QueueLeaseEntity : ITableEntity
+{
+    public string PartitionKey { get; set; } = "queueleases";
+    public string RowKey { get; set; } = "";
+    public DateTimeOffset? Timestamp { get; set; }
+    public ETag ETag { get; set; }
+
+    public string QueueScope { get; set; } = "";
+    public string LeaseOwner { get; set; } = "";
+    public string? ActiveOperationId { get; set; }
+    public DateTime LeaseAcquiredTime { get; set; }
+    public DateTime LeaseHeartbeatTime { get; set; }
+}
+
 /// <summary>
 /// Service for persistent operation storage using Azure Table Storage
 /// </summary>
@@ -113,6 +146,8 @@ public class OperationStorageService
     private readonly SemaphoreSlim _initLock = new(1, 1);
     private volatile bool _tableInitialized;
     private const string TableName = "OperationStatus";
+    private const string OperationPartitionKey = "operations";
+    private const string QueueLeasePartitionKey = "queueleases";
     
     public OperationStorageService(ILogger<OperationStorageService> logger)
     {
@@ -236,7 +271,7 @@ public class OperationStorageService
             var operations = new List<OperationStatus>();
 
             await foreach (var entity in _tableClient.QueryAsync<OperationEntity>(
-                filter: $"PartitionKey eq 'operations' and Status eq 'running'"))
+                filter: $"PartitionKey eq '{OperationPartitionKey}' and Status eq '{OperationStatusEnum.Running}'"))
             {
                 operations.Add(entity.ToOperationStatus());
             }
@@ -250,6 +285,238 @@ public class OperationStorageService
         }
     }
 
+    public virtual async Task<List<OperationStatus>> GetQueuedOperationsAsync(string queueScope)
+    {
+        try
+        {
+            await EnsureTableInitializedAsync();
+            var operations = new List<OperationStatus>();
+
+            await foreach (var entity in _tableClient.QueryAsync<OperationEntity>(
+                filter: $"PartitionKey eq '{OperationPartitionKey}' and Status eq '{OperationStatusEnum.Queued}' and QueueScope eq '{queueScope}'"))
+            {
+                operations.Add(entity.ToOperationStatus());
+            }
+
+            return operations
+                .OrderBy(op => op.EnqueuedTime)
+                .ThenBy(op => op.OperationId, StringComparer.Ordinal)
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to retrieve queued operations for scope {QueueScope}: {ErrorMessage}", queueScope, ex.Message);
+            return new List<OperationStatus>();
+        }
+    }
+
+    public virtual async Task<int?> GetQueuePositionAsync(string operationId)
+    {
+        var operation = await GetOperationAsync(operationId);
+        if (operation == null || !string.Equals(operation.Status, OperationStatusEnum.Queued, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var queuedOperations = await GetQueuedOperationsAsync(operation.QueueScope);
+        var position = queuedOperations.FindIndex(op => string.Equals(op.OperationId, operationId, StringComparison.Ordinal));
+        return position >= 0 ? position + 1 : null;
+    }
+
+    public virtual async Task<bool> TryAcquireQueueLeaseAsync(string queueScope, string leaseOwner, TimeSpan staleAfter, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await EnsureTableInitializedAsync(cancellationToken);
+            var now = DateTime.UtcNow;
+            var entity = new QueueLeaseEntity
+            {
+                RowKey = queueScope,
+                QueueScope = queueScope,
+                LeaseOwner = leaseOwner,
+                LeaseAcquiredTime = now,
+                LeaseHeartbeatTime = now
+            };
+
+            await _tableClient.AddEntityAsync(entity, cancellationToken);
+            return true;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 409)
+        {
+            try
+            {
+                var existing = await _tableClient.GetEntityAsync<QueueLeaseEntity>(QueueLeasePartitionKey, queueScope, cancellationToken: cancellationToken);
+                var lease = existing.Value;
+                if (!IsLeaseStale(lease, staleAfter))
+                {
+                    return false;
+                }
+
+                lease.LeaseOwner = leaseOwner;
+                lease.LeaseAcquiredTime = DateTime.UtcNow;
+                lease.LeaseHeartbeatTime = lease.LeaseAcquiredTime;
+                lease.ActiveOperationId = null;
+
+                await _tableClient.UpdateEntityAsync(lease, lease.ETag, TableUpdateMode.Replace, cancellationToken);
+                return true;
+            }
+            catch (RequestFailedException updateEx) when (updateEx.Status == 404 || updateEx.Status == 412)
+            {
+                return false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to acquire queue lease for scope {QueueScope}: {ErrorMessage}", queueScope, ex.Message);
+        }
+
+        return false;
+    }
+
+    public virtual async Task<string?> TryPromoteNextQueuedOperationAsync(string queueScope, string leaseOwner, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await EnsureTableInitializedAsync(cancellationToken);
+            var leaseResponse = await _tableClient.GetEntityAsync<QueueLeaseEntity>(QueueLeasePartitionKey, queueScope, cancellationToken: cancellationToken);
+            var lease = leaseResponse.Value;
+            if (!string.Equals(lease.LeaseOwner, leaseOwner, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            var candidates = new List<OperationEntity>();
+            await foreach (var entity in _tableClient.QueryAsync<OperationEntity>(
+                filter: $"PartitionKey eq '{OperationPartitionKey}' and Status eq '{OperationStatusEnum.Queued}' and QueueScope eq '{queueScope}'",
+                cancellationToken: cancellationToken))
+            {
+                candidates.Add(entity);
+            }
+
+            var next = candidates
+                .OrderBy(op => op.EnqueuedTime)
+                .ThenBy(op => op.OperationId, StringComparer.Ordinal)
+                .FirstOrDefault();
+
+            if (next == null)
+            {
+                return null;
+            }
+
+            var now = DateTime.UtcNow;
+            next.Status = OperationStatusEnum.Running;
+            next.StartTime = now;
+            next.EndTime = null;
+            next.ErrorMessage = null;
+            next.Result = null;
+            next.LeaseOwner = leaseOwner;
+            next.LeaseAcquiredTime = now;
+            next.LeaseHeartbeatTime = now;
+            next.CurrentPhase = OperationPhaseEnum.Initializing;
+            next.TablesCompleted = 0;
+            next.TablesFailed = 0;
+            next.TablesInProgress = 0;
+            next.ProgressPercentage = 0;
+            next.CompletedTablesJson = "[]";
+            next.FailedTablesJson = "[]";
+            next.InProgressTablesJson = "[]";
+            next.LastBatchIndex = null;
+            next.LastBatchTablesJson = "[]";
+            next.LastBatchError = null;
+            next.LastBatchFailureCategory = null;
+            next.LastBatchFailureSource = null;
+
+            await _tableClient.UpdateEntityAsync(next, next.ETag, TableUpdateMode.Replace, cancellationToken);
+
+            lease.ActiveOperationId = next.OperationId;
+            lease.LeaseHeartbeatTime = now;
+            await _tableClient.UpdateEntityAsync(lease, lease.ETag, TableUpdateMode.Replace, cancellationToken);
+
+            return next.OperationId;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404 || ex.Status == 412)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to promote next queued operation for scope {QueueScope}: {ErrorMessage}", queueScope, ex.Message);
+            return null;
+        }
+    }
+
+    public virtual async Task<bool> RenewQueueLeaseAsync(string queueScope, string leaseOwner, string operationId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await EnsureTableInitializedAsync(cancellationToken);
+            var leaseResponse = await _tableClient.GetEntityAsync<QueueLeaseEntity>(QueueLeasePartitionKey, queueScope, cancellationToken: cancellationToken);
+            var lease = leaseResponse.Value;
+            if (!string.Equals(lease.LeaseOwner, leaseOwner, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var now = DateTime.UtcNow;
+            lease.ActiveOperationId = operationId;
+            lease.LeaseHeartbeatTime = now;
+            await _tableClient.UpdateEntityAsync(lease, lease.ETag, TableUpdateMode.Replace, cancellationToken);
+
+            var operationResponse = await _tableClient.GetEntityAsync<OperationEntity>(OperationPartitionKey, operationId, cancellationToken: cancellationToken);
+            var operation = operationResponse.Value;
+            operation.LeaseHeartbeatTime = now;
+            await _tableClient.UpdateEntityAsync(operation, operation.ETag, TableUpdateMode.Replace, cancellationToken);
+
+            return true;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404 || ex.Status == 412)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to renew queue lease for operation {OperationId}: {ErrorMessage}", operationId, ex.Message);
+            return false;
+        }
+    }
+
+    public virtual async Task<bool> ReleaseQueueLeaseAsync(string queueScope, string leaseOwner, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await EnsureTableInitializedAsync(cancellationToken);
+            var leaseResponse = await _tableClient.GetEntityAsync<QueueLeaseEntity>(QueueLeasePartitionKey, queueScope, cancellationToken: cancellationToken);
+            var lease = leaseResponse.Value;
+            if (!string.Equals(lease.LeaseOwner, leaseOwner, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            await _tableClient.DeleteEntityAsync(lease.PartitionKey, lease.RowKey, lease.ETag, cancellationToken);
+            return true;
+        }
+        catch (RequestFailedException ex) when (ex.Status == 404 || ex.Status == 412)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to release queue lease for scope {QueueScope}: {ErrorMessage}", queueScope, ex.Message);
+            return false;
+        }
+    }
+
+    public virtual async Task<bool> ReleaseQueueLeaseForOperationAsync(string operationId, CancellationToken cancellationToken = default)
+    {
+        var operation = await GetOperationAsync(operationId);
+        if (operation == null || string.IsNullOrWhiteSpace(operation.QueueScope) || string.IsNullOrWhiteSpace(operation.LeaseOwner))
+        {
+            return false;
+        }
+
+        return await ReleaseQueueLeaseAsync(operation.QueueScope, operation.LeaseOwner, cancellationToken);
+    }
+
     /// <summary>
     /// Mark an operation as failed with a given error message
     /// </summary>
@@ -260,10 +527,10 @@ public class OperationStorageService
             var operation = await GetOperationAsync(operationId);
             if (operation == null) return false;
 
-            operation.Status = "failed";
+            operation.Status = OperationStatusEnum.Failed;
             operation.EndTime = DateTime.UtcNow;
             operation.ErrorMessage = errorMessage;
-            operation.CurrentPhase = "Failed";
+            operation.CurrentPhase = OperationPhaseEnum.Failed;
             return await UpsertOperationAsync(operation);
         }
         catch (Exception ex)
@@ -276,23 +543,27 @@ public class OperationStorageService
     /// <summary>
     /// Get operation counts by status
     /// </summary>
-    public virtual async Task<(int running, int completed, int failed, int total)> GetOperationCountsAsync()
+    public virtual async Task<(int queued, int running, int completed, int failed, int total)> GetOperationCountsAsync()
     {
         try
         {
             await EnsureTableInitializedAsync();
+            var queued = 0;
             var running = 0;
             var completed = 0;
             var failed = 0;
             var total = 0;
             
             await foreach (var entity in _tableClient.QueryAsync<OperationEntity>(
-                filter: $"PartitionKey eq 'operations'",
+                filter: $"PartitionKey eq '{OperationPartitionKey}'",
                 select: new[] { "Status" }))
             {
                 total++;
                 switch (entity.Status.ToLowerInvariant())
                 {
+                    case OperationStatusEnum.Queued:
+                        queued++;
+                        break;
                     case "running":
                         running++;
                         break;
@@ -305,13 +576,28 @@ public class OperationStorageService
                 }
             }
             
-            return (running, completed, failed, total);
+            return (queued, running, completed, failed, total);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get operation counts: {ErrorMessage}", ex.Message);
-            return (0, 0, 0, 0);
+            return (0, 0, 0, 0, 0);
         }
+    }
+
+    public virtual async Task<List<OperationStatus>> GetStaleRunningOperationsAsync(TimeSpan staleAfter, CancellationToken cancellationToken = default)
+    {
+        var runningOperations = await GetRunningOperationsAsync();
+        var cutoff = DateTime.UtcNow - staleAfter;
+        return runningOperations
+            .Where(op => (op.LeaseHeartbeatTime ?? op.StartTime) < cutoff)
+            .ToList();
+    }
+
+    private static bool IsLeaseStale(QueueLeaseEntity lease, TimeSpan staleAfter)
+    {
+        var lastHeartbeat = lease.LeaseHeartbeatTime == default ? lease.LeaseAcquiredTime : lease.LeaseHeartbeatTime;
+        return lastHeartbeat < DateTime.UtcNow - staleAfter;
     }
 }
 

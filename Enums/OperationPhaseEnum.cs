@@ -6,6 +6,7 @@ namespace DHRefreshAAS.Enums;
 public static class OperationPhaseEnum
 {
     public const string Initializing = "Initializing";
+    public const string Queued = "Queued";
     public const string ProcessingTables = "Processing Tables";
     public const string SavingChanges = "Saving Changes";
     public const string Completed = "Completed";

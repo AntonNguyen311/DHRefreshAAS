@@ -2,6 +2,14 @@
 
 This note captures the current environment routing that was verified with live AAS metadata and SQL mapping tables.
 
+Use this file when the question is specifically about:
+
+- which Logic App hits which SQL connection
+- which cube maps to which SQL environment
+- whether a failure could be explained by cross-environment routing
+
+For the broader operator/session resume view, start with `docs/ProjectSessionResume.md`.
+
 ## Logic Apps
 
 - `RefreshCube` uses SQL connection resource `sql`
@@ -73,6 +81,14 @@ Contains cube mappings for:
 - `RefreshCube_UAT` can still inherit production pressure through `MM_CubeModel`, because that model mixes `datalakeprod` and `datalakeprod_uat`.
 - `RefreshCube_new` can still inherit production pressure through `NEW_CubeModel`, because that model mixes `new` and `datalakeprod`.
 - `PROD_DataAnalyticsModel` currently points to `datalakeprod_uat`; this should be confirmed as intentional.
+
+## Why This Matters When Debugging
+
+- If a workflow is healthy in UAT/new but fails in prod, check whether the failing model routes to `datalakeprod`.
+- If a UAT or new workflow shows unexpected pressure symptoms, confirm whether the model still reaches `datalakeprod` through shared data sources.
+- Routing and recipient policy are different concerns:
+  - routing facts live here;
+  - recipient policy and execution order live in `docs/migration_add_CubeRefreshPolicy.sql` and `docs/ProjectSessionResume.md`.
 
 ## Follow-up Checks
 

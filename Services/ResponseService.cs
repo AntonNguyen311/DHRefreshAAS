@@ -41,7 +41,11 @@ public class ResponseService
     public virtual async Task<HttpResponseData> CreateAcceptedResponseAsync(
         HttpRequestData request, 
         string operationId, 
-        int estimatedDurationMinutes)
+        int estimatedDurationMinutes,
+        string operationStatus = "running",
+        string? message = null,
+        int? queuePosition = null,
+        string? queueScope = null)
     {
         var baseUrl = $"{request.Url.Scheme}://{request.Url.Host}{(request.Url.IsDefaultPort ? "" : $":{request.Url.Port}")}";
         var statusUrl = $"{baseUrl}/api/DHRefreshAAS_Status?operationId={operationId}";
@@ -49,10 +53,13 @@ public class ResponseService
         var responseData = new
         {
             operationId = operationId,
-            status = "accepted",
-            message = "Refresh operation started in background. Use status endpoint to monitor progress.",
+            status = operationStatus,
+            requestStatus = "accepted",
+            message = message ?? "Refresh operation started in background. Use status endpoint to monitor progress.",
             estimatedDurationMinutes = estimatedDurationMinutes,
-            statusUrl = statusUrl
+            statusUrl = statusUrl,
+            queuePosition = queuePosition,
+            queueScope = queueScope
         };
 
         return await CreateSuccessResponseAsync(request, responseData, HttpStatusCode.Accepted);
