@@ -13,6 +13,35 @@ Azure Functions app (.NET 8, isolated worker) that triggers **Azure Analysis Ser
 
 Triggers use `AuthorizationLevel.Function`; callers must supply the function key or appropriate identity at the gateway.
 
+## Resume Here
+
+When resuming work on this project, read these in order:
+
+1. [`docs/MasterModelHandoff.md`](docs/MasterModelHandoff.md)
+2. [`docs/ProjectSessionResume.md`](docs/ProjectSessionResume.md)
+3. [`docs/AzureCliAndDatabaseOperations.md`](docs/AzureCliAndDatabaseOperations.md)
+4. [`docs/SaveChangesFailureEvidence.md`](docs/SaveChangesFailureEvidence.md)
+5. [`docs/EnvironmentRoutingAudit.md`](docs/EnvironmentRoutingAudit.md)
+6. [`docs/app-settings-production.json`](docs/app-settings-production.json)
+
+If another model should understand the project from one document first, start with `docs/MasterModelHandoff.md`. Use the remaining docs for deeper detail on operations, evidence, routing, and baseline settings.
+
+## Shared Operator Env
+
+For cross-model handoff, shared operational connection metadata now lives in:
+
+- `.env.example`: tracked schema/template
+- `.env`: local working copy for the current machine
+- `load-env.ps1`: PowerShell helper that loads `.env` into the current process
+
+Usage:
+
+```powershell
+. .\load-env.ps1
+```
+
+After loading, other models or scripts can use variables such as `AZURE_SUBSCRIPTION_ID`, `AZURE_RESOURCE_GROUP`, `FUNCTION_APP_NAME`, `LOGIC_APP_REFRESHCUBE`, and `SQL_DYNAMICINVOKE_PROD_URL` directly from the environment.
+
 ## Configuration
 
 Application settings are read via `ConfigurationService` (see `Services/ConfigurationService.cs`). Typical keys include `AAS_SERVER_URL`, `AAS_DATABASE`, `AAS_AUTH_MODE`, credentials for Service Principal or User/Password, and retry/timeout settings such as `MAX_RETRY_ATTEMPTS`, `OPERATION_TIMEOUT_MINUTES`. **`operationTimeoutMinutes`** in the refresh POST body sets both the overall cancellation budget and the minimum **SaveChanges** wait (together with **`connectionTimeoutMinutes`**, which drives MSOLAP **Connect Timeout**; **Command Timeout** is derived from the larger of operation and `SAVE_CHANGES_TIMEOUT_MINUTES`, capped at two hours). Use Key Vault references or secure app settings in Azure; keep secrets out of source control.
@@ -28,6 +57,23 @@ For the current bottleneck profile, start from this safer operational baseline:
 For `MaxRowsPerRun`, use the current preflight pattern from `docs/LogicApp_RefreshCube_Workflow.json` and `docs/LogicApp_RefreshCube_UAT_Workflow.json`: compute row deltas in a separate `changedRows` CTE first, then join them into `candidate`. Do not put aggregate expressions such as `MAX(etlLog.ChangedRowCount)` directly inside the `candidate` guardrail `CASE` logic; that query shape previously broke the Logic App SQL connector.
 
 For the SQL policy-driven pilot, `docs/migration_add_CubeRefreshPolicy.sql` adds table-level policy metadata (`PolicyGroup`, `RefreshWave`, `RefreshPriority`, `TableOwnerRecipients`) plus `etl.cuberefreshnotificationpolicy` for warning/failure recipient routing. `RefreshCube_UAT` is the first workflow using this contract so recipient changes can be made in SQL without editing Logic App email expressions.
+
+## Operational Policy Locations
+
+- Table mapping and guardrails live in `etl.datawarehouseandcubemapping`
+- Warning/failure recipient policy lives in `etl.cuberefreshnotificationpolicy`
+- Policy schema and seed logic live in `docs/migration_add_CubeRefreshPolicy.sql`
+- Shortlist `MaxRowsPerRun = 500000` seed logic lives in `docs/migration_set_MaxRowsPerRun_500000_shortlist.sql`
+- Azure CLI, Logic App, and SQL `dynamicInvoke` operating steps live in `docs/AzureCliAndDatabaseOperations.md`
+- Workflow definitions live in:
+  - `docs/LogicApp_RefreshCube_Workflow.json`
+  - `docs/LogicApp_RefreshCube_UAT_Workflow.json`
+  - `docs/LogicApp_RefreshCubeNew_Workflow.json`
+
+Current state:
+
+- `RefreshCube` and `RefreshCube_UAT` resolve warning/failure recipients from SQL policy first
+- `RefreshCube_New` still uses the older contract and has not yet been migrated to SQL policy-driven recipient routing
 
 ## Dependency injection
 
