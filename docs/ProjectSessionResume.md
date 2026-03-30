@@ -70,18 +70,30 @@ Important behavior:
 
 ## Queue Behavior
 
-`DHRefreshAAS_HttpStart` now acts as the global execution gate for refresh work targeting `vnaassasdpp01`.
+`DHRefreshAAS_HttpStart` now acts as the execution gate for refresh work targeting `vnaassasdpp01`.
 
 - New requests are persisted first with `status = queued`.
-- Only one request per AAS queue scope is promoted to `running` at a time.
-- If another request arrives while one refresh is active, it stays queued and later starts automatically in FIFO order.
+- Queue scope is **per-database**: each AAS model gets its own lease (`aas:vnaassasdpp01:<database_name>`), so different databases refresh in parallel.
+- Only one request per queue scope is promoted to `running` at a time.
+- A global safety cap (`MAX_CONCURRENT_REFRESHES`, default 5) limits total simultaneous running operations across all scopes.
+- If another request arrives while one refresh is active in the same scope, it stays queued and later starts automatically in FIFO order.
 - `DHRefreshAAS_Status` now distinguishes `queued` from real execution failure and includes queue metadata such as scope, queue position, and lease timestamps.
 
 Operational implications:
 
-- Logic App `Foreach` concurrency `1` still only serializes databases inside a single workflow run.
-- The Function-level queue is the cross-run guard that prevents overlapping refresh execution when multiple `RefreshCube` requests land close together.
+- Logic App `Foreach` concurrency `5` submits all cubes in a run simultaneously.
+- Each cube targets a different database, so each gets its own queue scope and starts immediately (no convoy blocking).
+- The per-scope queue prevents overlapping refresh for the same database.
+- The global cap prevents AAS overload if many databases are refreshed at once.
 - If the host shuts down or a running operation becomes stale, startup/shutdown cleanup now releases the queue lease before the next queued request is allowed to start.
+
+### Recommended Trigger Stagger
+
+To reduce peak AAS pressure when both prod and UAT refresh simultaneously:
+
+- **RefreshCube** (prod): keep current trigger schedule
+- **RefreshCube_UAT**: offset by **15 minutes** from RefreshCube
+- This prevents both workflows from hitting Scale_Up -> restart -> "server starting" race condition at the same time
 
 ## Current Safe Baseline
 
@@ -90,6 +102,7 @@ These are the defaults to preserve unless there is a deliberate tuning change:
 - `SAVE_CHANGES_BATCH_SIZE = 3`
 - `SAVE_CHANGES_MAX_PARALLELISM = 2`
 - Logic App `Foreach` concurrency = `5`
+- `MAX_CONCURRENT_REFRESHES = 5`
 - `SAVE_CHANGES_TIMEOUT_MINUTES = 15`
 - `OPERATION_TIMEOUT_MINUTES = 60`
 - `CONNECTION_TIMEOUT_MINUTES = 10`
@@ -195,10 +208,26 @@ Why this matters:
 - the main failure surface is SQL pressure around `datalakeprod`, not just AAS capacity
 - reducing overlap, controlling payload size, and pre-blocking risky tables matters more than raising concurrency
 
+### Slow Table Evaluation (post parallel-queue change)
+
+Previously identified slow tables: `VNWH vw_fSalesNAVWithFactory`, `SalesNAV` monthly partitions (up to 7.4min per table during peak hours).
+
+With per-database queue scopes, slow tables no longer block other databases. Impact is now confined to their own queue scope. Current `MaxRowsPerRun = 500000` shortlist covers `DWH vw_fSalesNAV` but not `VNWH vw_fSalesNAVWithFactory`.
+
+Action items if slow tables remain a problem after parallel changes:
+
+- Add `VNWH vw_fSalesNAVWithFactory` to `MaxRowsPerRun` shortlist in `VN_CubeModel`
+- Consider `RequirePartition = 1` for `SalesNAV` monthly partitions if full-table refresh duration exceeds 5 minutes consistently
+- Monitor via `DHRefreshAAS_Status` per-table progress tracking
+
 ## Recent Important Validation Runs
 
 Use these IDs as anchors when cross-checking recent changes:
 
+- Parallel queue + Foreach concurrency=5 validation:
+  - `08584267336662775750167694361CU58` -> `RefreshCube_UAT` rerun: **4m32s** (down from 63m37s original run `08584267389525800553819776789CU46`)
+  - 3 databases submitted in parallel: `mm_cubemodel` (completed 2m32s), `id_cubemodel` (failed: server restarting), `prod_dataanalyticsmodel` (failed: server restarting)
+  - Queue scopes confirmed: `aas:vnaassasdpp01:mm_cubemodel`, `aas:vnaassasdpp01:id_cubemodel`, `aas:vnaassasdpp01:prod_dataanalyticsmodel`
 - UAT guardrail reintroduction:
   - `08584268132096677854381144049CU58` -> mapped-change run succeeded
   - `08584268119312186463939749743CU57` -> no-payload run skipped safely
@@ -223,6 +252,9 @@ Already deployed and validated live:
 - SQL policy-driven recipient and ordering model on:
   - `RefreshCube`
   - `RefreshCube_UAT`
+- Per-database queue scope (`BuildQueueScope` includes database name)
+- `MAX_CONCURRENT_REFRESHES = 5` safety cap
+- Logic App `Foreach` concurrency = `5` on all 3 workflows (`RefreshCube`, `RefreshCube_UAT`, `RefreshCube_New`)
 
 Not yet fully migrated:
 
@@ -252,7 +284,7 @@ If email routing behaves unexpectedly:
 1. Read `docs/SaveChangesFailureEvidence.md`
 2. Check whether the failing cube maps to `datalakeprod`
 3. Confirm current live app settings against `docs/app-settings-production.json`
-4. Confirm Logic App `Foreach` concurrency is still `1`
+4. Confirm Logic App `Foreach` concurrency is still `5`
 5. Inspect whether the run failed in:
    - preflight SQL
    - `DHRefreshAAS_HttpStart`

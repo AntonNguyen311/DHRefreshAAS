@@ -179,6 +179,7 @@ These are the current safe defaults and should be preserved unless there is a de
 - `SAVE_CHANGES_BATCH_SIZE = 3`
 - `SAVE_CHANGES_MAX_PARALLELISM = 2`
 - Logic App `Foreach` concurrency = `5`
+- `MAX_CONCURRENT_REFRESHES = 5`
 - `SAVE_CHANGES_TIMEOUT_MINUTES = 15`
 - `OPERATION_TIMEOUT_MINUTES = 60`
 - `CONNECTION_TIMEOUT_MINUTES = 10`
