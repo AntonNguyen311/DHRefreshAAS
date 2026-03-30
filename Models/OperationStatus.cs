@@ -11,7 +11,10 @@ public class OperationStatus
     public string OperationId { get; set; } = "";
     
     [JsonPropertyName("status")]
-    public string Status { get; set; } = ""; // "running", "completed", "failed"
+    public string Status { get; set; } = ""; // "queued", "running", "completed", "failed"
+
+    [JsonPropertyName("enqueuedTime")]
+    public DateTime EnqueuedTime { get; set; }
     
     [JsonPropertyName("startTime")]
     public DateTime StartTime { get; set; }
@@ -55,6 +58,15 @@ public class OperationStatus
     [JsonPropertyName("currentPhase")]
     public string CurrentPhase { get; set; } = "Initializing";
 
+    [JsonPropertyName("queueScope")]
+    public string QueueScope { get; set; } = "";
+
+    [JsonPropertyName("leaseAcquiredTime")]
+    public DateTime? LeaseAcquiredTime { get; set; }
+
+    [JsonPropertyName("leaseHeartbeatTime")]
+    public DateTime? LeaseHeartbeatTime { get; set; }
+
     [JsonPropertyName("lastBatchIndex")]
     public int? LastBatchIndex { get; set; }
 
@@ -75,4 +87,10 @@ public class OperationStatus
     /// </summary>
     [JsonIgnore]
     public RefreshObject[]? RefreshObjects { get; set; }
+
+    [JsonIgnore]
+    public string? RequestPayloadJson { get; set; }
+
+    [JsonIgnore]
+    public string? LeaseOwner { get; set; }
 }

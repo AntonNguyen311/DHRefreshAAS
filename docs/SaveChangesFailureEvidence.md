@@ -156,6 +156,17 @@ The checked-in reference file `docs/app-settings-production.json` has been updat
   - controlled run `08584268018430812336637589863CU07` succeeded after promotion;
   - warning/failure recipient resolution on prod now follows SQL policy first, then owner fallback, then emergency fallback.
 
+## Queue hardening
+
+To reduce refresh overlap against the shared AAS server:
+
+- `DHRefreshAAS_HttpStart` now persists requests into a global queue scope for `vnaassasdpp01` before starting work;
+- only one queued request can hold the active execution lease at a time;
+- later requests remain in `queued` state instead of racing into overlapping AAS execution;
+- zombie/shutdown cleanup now releases queue leases so a stale runner does not block the next request forever.
+
+This does not change the underlying `SaveChanges` engine behavior, but it reduces one major trigger for transient `server is starting but not ready yet` failures: overlapping refresh orchestration against the same AAS instance.
+
 ## Safe rollback rule
 
 If a future preflight edit causes `Get_AAS_Model_Tables_JSON_Format` to fail again:

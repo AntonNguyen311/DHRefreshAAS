@@ -48,6 +48,27 @@ public class DHRefreshAASControllerTests
         _mockHostLifetime = new Mock<IHostApplicationLifetime>();
         _mockHostLifetime.Setup(l => l.ApplicationStopping).Returns(CancellationToken.None);
         _mockLogger = new Mock<ILogger<DHRefreshAASController>>();
+        _mockOperationStorage
+            .Setup(x => x.TryAcquireQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        _mockOperationStorage
+            .Setup(x => x.TryPromoteNextQueuedOperationAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string?)null);
+        _mockOperationStorage
+            .Setup(x => x.GetQueuePositionAsync(It.IsAny<string>()))
+            .ReturnsAsync((int?)null);
+        _mockOperationStorage
+            .Setup(x => x.ReleaseQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mockOperationStorage
+            .Setup(x => x.ReleaseQueueLeaseForOperationAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mockOperationStorage
+            .Setup(x => x.RenewQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        _mockOperationStorage
+            .Setup(x => x.MarkOperationAsFailedAsync(It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(true);
 
         _controller = new DHRefreshAASController(
             _mockConfig.Object,
@@ -143,9 +164,8 @@ public class DHRefreshAASControllerTests
     }
 
     [Fact]
-    public async Task HttpStart_ValidRequest_StartsAsyncOperation()
+    public async Task HttpStart_WhenLeaseBusy_QueuesOperation()
     {
-        // Arrange
         var mockRequest = CreateMockHttpRequest();
         var mockContext = CreateMockFunctionContext();
         var requestData = new PostData
@@ -176,18 +196,203 @@ public class DHRefreshAASControllerTests
             .Setup(x => x.EstimateOperationDuration(requestData))
             .Returns(15);
 
+        _mockOperationStorage
+            .Setup(x => x.UpsertOperationAsync(It.IsAny<OperationStatus>()))
+            .ReturnsAsync(true);
+        _mockOperationStorage
+            .Setup(x => x.GetQueuePositionAsync(It.IsAny<string>()))
+            .ReturnsAsync(2);
+
+        string? acceptedStatus = null;
+        int? acceptedQueuePosition = null;
         var mockAcceptedResponse = CreateMockHttpResponse(HttpStatusCode.Accepted);
         _mockResponseService
-            .Setup(x => x.CreateAcceptedResponseAsync(It.IsAny<HttpRequestData>(), It.IsAny<string>(), 15))
+            .Setup(x => x.CreateAcceptedResponseAsync(
+                It.IsAny<HttpRequestData>(),
+                It.IsAny<string>(),
+                15,
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<int?>(),
+                It.IsAny<string?>()))
+            .Callback<HttpRequestData, string, int, string, string?, int?, string?>((_, _, _, status, _, queuePosition, _) =>
+            {
+                acceptedStatus = status;
+                acceptedQueuePosition = queuePosition;
+            })
             .ReturnsAsync(mockAcceptedResponse);
 
-        // Act
         var result = await _controller.HttpStart(mockRequest.Object, mockContext.Object);
 
-        // Assert
         Assert.Equal(HttpStatusCode.Accepted, result.StatusCode);
+        Assert.Equal(OperationStatusEnum.Queued, acceptedStatus);
+        Assert.Equal(2, acceptedQueuePosition);
         _mockRequestProcessing.Verify(x => x.ParseAndValidateRequestAsync(It.IsAny<HttpRequestData>()), Times.Once);
         _mockOperationStorage.Verify(x => x.UpsertOperationAsync(It.IsAny<OperationStatus>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task HttpStart_WhenQueueHeadClaimed_StartsImmediately()
+    {
+        var mockRequest = CreateMockHttpRequest();
+        var mockContext = CreateMockFunctionContext();
+        var requestData = new PostData
+        {
+            DatabaseName = "Db",
+            RefreshObjects = new[] { new RefreshObject { Table = "TestTable" } },
+            OperationTimeoutMinutes = 30
+        };
+
+        var enhancedRequestData = new EnhancedPostData
+        {
+            OriginalRequest = requestData,
+            MaxRetryAttempts = 3,
+            BaseDelaySeconds = 2,
+            ConnectionTimeoutMinutes = 10,
+            OperationTimeoutMinutes = 30
+        };
+
+        OperationStatus? storedOperation = null;
+        string? acceptedStatus = null;
+        var acquireCalls = 0;
+
+        _mockRequestProcessing
+            .Setup(x => x.ParseAndValidateRequestAsync(It.IsAny<HttpRequestData>()))
+            .ReturnsAsync(requestData);
+        _mockRequestProcessing
+            .Setup(x => x.CreateEnhancedRequestData(requestData, _mockConfig.Object))
+            .Returns(enhancedRequestData);
+        _mockRequestProcessing
+            .Setup(x => x.EstimateOperationDuration(requestData))
+            .Returns(15);
+        _mockOperationStorage
+            .Setup(x => x.UpsertOperationAsync(It.IsAny<OperationStatus>()))
+            .Callback<OperationStatus>(op => storedOperation = op)
+            .ReturnsAsync(true);
+        _mockOperationStorage
+            .Setup(x => x.TryAcquireQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => acquireCalls++ == 0);
+        _mockOperationStorage
+            .Setup(x => x.TryPromoteNextQueuedOperationAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => acquireCalls == 1 ? storedOperation?.OperationId : null);
+        _mockOperationStorage
+            .Setup(x => x.GetOperationAsync(It.IsAny<string>()))
+            .ReturnsAsync(() => storedOperation == null
+                ? null
+                : new OperationStatus
+                {
+                    OperationId = storedOperation.OperationId,
+                    Status = OperationStatusEnum.Running,
+                    EnqueuedTime = storedOperation.EnqueuedTime,
+                    StartTime = storedOperation.StartTime,
+                    QueueScope = storedOperation.QueueScope,
+                    LeaseOwner = "lease-owner",
+                    RequestPayloadJson = ""
+                });
+
+        var mockAcceptedResponse = CreateMockHttpResponse(HttpStatusCode.Accepted);
+        _mockResponseService
+            .Setup(x => x.CreateAcceptedResponseAsync(
+                It.IsAny<HttpRequestData>(),
+                It.IsAny<string>(),
+                15,
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<int?>(),
+                It.IsAny<string?>()))
+            .Callback<HttpRequestData, string, int, string, string?, int?, string?>((_, _, _, status, _, _, _) => acceptedStatus = status)
+            .ReturnsAsync(mockAcceptedResponse);
+
+        var result = await _controller.HttpStart(mockRequest.Object, mockContext.Object);
+
+        Assert.Equal(HttpStatusCode.Accepted, result.StatusCode);
+        Assert.Equal(OperationStatusEnum.Running, acceptedStatus);
+        _mockOperationStorage.Verify(x => x.TryAcquireQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()), Times.AtLeastOnce);
+        _mockOperationStorage.Verify(x => x.TryPromoteNextQueuedOperationAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task HttpStart_WhenOlderQueuedHeadIsClaimed_CurrentRequestStaysQueued()
+    {
+        var mockRequest = CreateMockHttpRequest();
+        var mockContext = CreateMockFunctionContext();
+        var requestData = new PostData
+        {
+            DatabaseName = "Db",
+            RefreshObjects = new[] { new RefreshObject { Table = "TestTable" } },
+            OperationTimeoutMinutes = 30
+        };
+
+        var enhancedRequestData = new EnhancedPostData
+        {
+            OriginalRequest = requestData,
+            MaxRetryAttempts = 3,
+            BaseDelaySeconds = 2,
+            ConnectionTimeoutMinutes = 10,
+            OperationTimeoutMinutes = 30
+        };
+
+        string? currentOperationId = null;
+        string? acceptedStatus = null;
+        var acquireCalls = 0;
+
+        _mockRequestProcessing
+            .Setup(x => x.ParseAndValidateRequestAsync(It.IsAny<HttpRequestData>()))
+            .ReturnsAsync(requestData);
+        _mockRequestProcessing
+            .Setup(x => x.CreateEnhancedRequestData(requestData, _mockConfig.Object))
+            .Returns(enhancedRequestData);
+        _mockRequestProcessing
+            .Setup(x => x.EstimateOperationDuration(requestData))
+            .Returns(15);
+        _mockOperationStorage
+            .Setup(x => x.UpsertOperationAsync(It.IsAny<OperationStatus>()))
+            .Callback<OperationStatus>(op => currentOperationId = op.OperationId)
+            .ReturnsAsync(true);
+        _mockOperationStorage
+            .Setup(x => x.TryAcquireQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => acquireCalls++ == 0);
+        _mockOperationStorage
+            .Setup(x => x.TryPromoteNextQueuedOperationAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => acquireCalls == 1 ? "older-operation" : null);
+        _mockOperationStorage
+            .Setup(x => x.GetQueuePositionAsync(It.IsAny<string>()))
+            .ReturnsAsync(2);
+        _mockOperationStorage
+            .Setup(x => x.GetOperationAsync("older-operation"))
+            .ReturnsAsync(new OperationStatus
+            {
+                OperationId = "older-operation",
+                Status = OperationStatusEnum.Running,
+                EnqueuedTime = DateTime.UtcNow.AddMinutes(-1),
+                StartTime = DateTime.UtcNow,
+                QueueScope = "aas:vnaassasdpp01",
+                LeaseOwner = "lease-owner",
+                RequestPayloadJson = ""
+            });
+
+        var mockAcceptedResponse = CreateMockHttpResponse(HttpStatusCode.Accepted);
+        _mockResponseService
+            .Setup(x => x.CreateAcceptedResponseAsync(
+                It.IsAny<HttpRequestData>(),
+                It.IsAny<string>(),
+                15,
+                It.IsAny<string>(),
+                It.IsAny<string?>(),
+                It.IsAny<int?>(),
+                It.IsAny<string?>()))
+            .Callback<HttpRequestData, string, int, string, string?, int?, string?>((_, operationId, _, status, _, _, _) =>
+            {
+                currentOperationId ??= operationId;
+                acceptedStatus = status;
+            })
+            .ReturnsAsync(mockAcceptedResponse);
+
+        var result = await _controller.HttpStart(mockRequest.Object, mockContext.Object);
+
+        Assert.Equal(HttpStatusCode.Accepted, result.StatusCode);
+        Assert.Equal(OperationStatusEnum.Queued, acceptedStatus);
+        Assert.NotEqual("older-operation", currentOperationId);
     }
 
     [Fact]
@@ -285,7 +490,7 @@ public class DHRefreshAASControllerTests
             new OperationStatus { OperationId = "op2", Status = OperationStatusEnum.Running }
         };
 
-        var operationCounts = (total: 10, running: 3, completed: 6, failed: 1);
+        var operationCounts = (queued: 2, running: 3, completed: 6, failed: 1, total: 12);
 
         _mockOperationStorage
             .Setup(x => x.GetRecentOperationsAsync(10))

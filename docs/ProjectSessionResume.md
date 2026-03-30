@@ -68,6 +68,21 @@ Important behavior:
 - Real engine-side parallelism happens inside AAS, not in this repo loop.
 - The safe preflight SQL pattern for `RefreshCube` and `RefreshCube_UAT` is `changedRows -> candidate`.
 
+## Queue Behavior
+
+`DHRefreshAAS_HttpStart` now acts as the global execution gate for refresh work targeting `vnaassasdpp01`.
+
+- New requests are persisted first with `status = queued`.
+- Only one request per AAS queue scope is promoted to `running` at a time.
+- If another request arrives while one refresh is active, it stays queued and later starts automatically in FIFO order.
+- `DHRefreshAAS_Status` now distinguishes `queued` from real execution failure and includes queue metadata such as scope, queue position, and lease timestamps.
+
+Operational implications:
+
+- Logic App `Foreach` concurrency `1` still only serializes databases inside a single workflow run.
+- The Function-level queue is the cross-run guard that prevents overlapping refresh execution when multiple `RefreshCube` requests land close together.
+- If the host shuts down or a running operation becomes stale, startup/shutdown cleanup now releases the queue lease before the next queued request is allowed to start.
+
 ## Current Safe Baseline
 
 These are the defaults to preserve unless there is a deliberate tuning change:

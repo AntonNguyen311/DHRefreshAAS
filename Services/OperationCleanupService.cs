@@ -53,6 +53,7 @@ public class OperationCleanupService : IHostedService
             {
                 await _operationStorage.MarkOperationAsFailedAsync(
                     operationId, "Operation terminated: application shutting down");
+                await _operationStorage.ReleaseQueueLeaseForOperationAsync(operationId);
                 _logger.LogInformation("Marked in-flight operation {OperationId} as failed (shutdown)", operationId);
             }
             catch (Exception ex)
@@ -64,13 +65,13 @@ public class OperationCleanupService : IHostedService
 
     private async Task CleanupZombieOperationsAsync(CancellationToken cancellationToken)
     {
+        var staleAfter = TimeSpan.FromMinutes(_config.ZombieTimeoutMinutes);
         var timeoutMinutes = _config.ZombieTimeoutMinutes;
         var runningOps = await _operationStorage.GetRunningOperationsAsync();
 
         if (runningOps.Count == 0) return;
 
-        var cutoff = DateTime.UtcNow.AddMinutes(-timeoutMinutes);
-        var zombies = runningOps.Where(op => op.StartTime < cutoff).ToList();
+        var zombies = await _operationStorage.GetStaleRunningOperationsAsync(staleAfter, cancellationToken);
 
         if (zombies.Count == 0)
         {
@@ -87,6 +88,7 @@ public class OperationCleanupService : IHostedService
             await _operationStorage.MarkOperationAsFailedAsync(
                 zombie.OperationId,
                 $"Operation terminated: marked as zombie during application startup (running for {age:F0} min, exceeded {timeoutMinutes} min timeout)");
+            await _operationStorage.ReleaseQueueLeaseForOperationAsync(zombie.OperationId, cancellationToken);
             _logger.LogInformation("Cleaned up zombie operation {OperationId} (age: {Age:F0} min)", zombie.OperationId, age);
         }
 
