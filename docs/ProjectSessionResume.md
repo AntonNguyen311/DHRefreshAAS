@@ -262,6 +262,37 @@ Related validation finding:
 - extract manual validation later exposed a separate ADF logging issue: `common pipeline - 04 - ETL loggingJsonStr` checks optional fields by searching the whole serialized payload string, so extract callers that include `DataSourceId` only inside nested `Parametters` can still fail
 - the live fix was to make `104 - Extract pipeline for One DataSource - DeltaExtract` emit top-level `DataSourceId` and `ExtractLoadControlTableId` in its logging payload before calling `common pipeline - 04`
 
+## March 30 Follow-Up Hardening
+
+Implemented live after the SQL 209 fix:
+
+- `103 - Extract pipeline for One DataSource - BottomLevel` now emits top-level `DataSourceId`, `ExtractLoadControlTableId`, and `ChildPipelineRunId` for `FullExtract` and `DefaultExtract` logging payloads
+- `104 - Extract pipeline for One DataSource - DeltaExtract` now emits the same top-level typed fields for delta logging payloads
+- `103` and `104` now include explicit fallback wait activities on logging failure so extract business execution does not fail only because the logging child pipeline failed
+- the tracked SQL migration for controlled recovery is `docs/migration_add_MasterLineageOverrideAndSsisJobCorrelation.sql`
+
+What the migration adds:
+
+- nullable `LineageKey`, `MasterPipelineRunId`, and `LastLinkedDateUtc` columns on `dbo.SSISJobInfo`
+- `ETL.p_LinkMasterLineageToSSISJobInfo` to correlate SSIS job rows to a master lineage
+- `ETL.MasterLineageOverride` plus `ETL.p_GrantMasterLineageOverride` for audited one-time master reopen approval
+- an updated `ETL.MasterEtlGetLineageKey` that honors only an active scoped override and consumes it on use
+
+Automatic recovery follow-up:
+
+- the tracked SQL migration for transient-only auto rerun is `docs/migration_add_MasterAutoRecoveryPolicy.sql`
+- it adds `ETL.MasterAutoRecoveryPolicy` and `ETL.p_GetMasterAutoRecoveryDecision`
+- `ETL.MasterEtlGetLineageKey` now auto-grants `AUTO_ALLOW_NEXT_MASTER_RUN` only when the failed lineage has transient ETL failures only, the related `SSISJobInfo` row is linked, the job is in the safe `FAILED` state, and the auto retry budget is still available
+- `Extract and load pipeline in queue` now writes back the child master `pipelineRunId`, resolved `LineageKey`, and `LastLinkedDateUtc` into `dbo.SSISJobInfo` after the master run completes, so later recovery decisions have a durable job-to-lineage correlation
+
+Latest controlled validation:
+
+- manual rerun of `101 - Extract pipeline for One DataSource - TopLevel` for `LineageKey = 29483` succeeded with run id `781af03b-bee3-4c85-87df-951d86031802`
+- the rerun used `MasterPipelineRunId = 7c30c7eb-7a9a-4f5f-8daa-6dcad7a6e410`
+- pending extract count for `LineageKey = 29483` and `DataSourceId = 1` dropped from `10` delta tables to `0`
+- transaction-only validation confirmed `ETL.p_GetMasterAutoRecoveryDecision` returns `AutoRerunEligible` for a transient-only failed lineage linked to a failed `SSISJobInfo` row
+- transaction-only validation confirmed `ETL.MasterEtlGetLineageKey` auto-created and consumed `AUTO_ALLOW_NEXT_MASTER_RUN`, then opened the next lineage successfully
+
 ## Restart Checklist For A Future Session
 
 1. Read `readme.md`
