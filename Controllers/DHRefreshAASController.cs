@@ -338,7 +338,7 @@ public class DHRefreshAASController
         ILogger logger)
     {
         var operationId = Guid.NewGuid().ToString();
-        var queueScope = BuildQueueScope();
+        var queueScope = BuildQueueScope(requestData.DatabaseName);
         var enqueuedTime = DateTime.UtcNow;
         logger.LogInformation("Queueing refresh operation {OperationId} in scope {QueueScope}", operationId, queueScope);
         
@@ -358,7 +358,7 @@ public class DHRefreshAASController
 
         await _operationStorage.UpsertOperationAsync(operationStatus);
 
-        var startedOperationId = await TryStartNextQueuedOperationAsync(logger);
+        var startedOperationId = await TryStartNextQueuedOperationAsync(queueScope, logger);
         var queuePosition = await _operationStorage.GetQueuePositionAsync(operationId);
         var startedImmediately = string.Equals(startedOperationId, operationId, StringComparison.Ordinal);
         var acceptedMessage = startedImmediately
@@ -539,14 +539,25 @@ public class DHRefreshAASController
                 }
 
                 _cleanupService.UntrackOperation(operationId);
-                await TryStartNextQueuedOperationAsync(logger);
+
+                var finalScope = operation?.QueueScope;
+                if (!string.IsNullOrWhiteSpace(finalScope))
+                {
+                    await TryStartNextQueuedOperationAsync(finalScope, logger);
+                }
             }
         });
     }
 
-    private async Task<string?> TryStartNextQueuedOperationAsync(ILogger logger)
+    private async Task<string?> TryStartNextQueuedOperationAsync(string queueScope, ILogger logger)
     {
-        var queueScope = BuildQueueScope();
+        var totalRunning = await _operationStorage.GetRunningOperationCountAsync();
+        if (totalRunning >= _config.MaxConcurrentRefreshes)
+        {
+            logger.LogInformation("Skipping queue promotion: {Running} operations already running (max {Max})", totalRunning, _config.MaxConcurrentRefreshes);
+            return null;
+        }
+
         var leaseOwner = Guid.NewGuid().ToString("N");
         if (!await _operationStorage.TryAcquireQueueLeaseAsync(queueScope, leaseOwner, GetQueueLeaseStaleAfter()))
         {
@@ -589,7 +600,13 @@ public class DHRefreshAASController
         }
     }
 
-    private string BuildQueueScope() => $"aas:{_config.AasServerName}".ToLowerInvariant();
+    private string BuildQueueScope(string? databaseName = null)
+    {
+        var scope = $"aas:{_config.AasServerName}";
+        if (!string.IsNullOrWhiteSpace(databaseName))
+            scope += $":{databaseName}";
+        return scope.ToLowerInvariant();
+    }
 
     private TimeSpan GetQueueLeaseStaleAfter() =>
         TimeSpan.FromMinutes(Math.Max(_config.ZombieTimeoutMinutes, _config.OperationTimeoutMinutes) + 5);

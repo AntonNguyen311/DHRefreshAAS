@@ -76,6 +76,7 @@ public class ConfigurationService
     public virtual string AasSubscriptionId => GetConfigValue("AAS_SUBSCRIPTION_ID", "8730775e-045c-47d1-a080-e3b9882cec01");
     public virtual int HeartbeatIntervalSeconds => GetConfigValue("HEARTBEAT_INTERVAL_SECONDS", 30);
     public virtual int ZombieTimeoutMinutes => GetConfigValue("ZOMBIE_TIMEOUT_MINUTES", 30);
+    public virtual int MaxConcurrentRefreshes => GetConfigValue("MAX_CONCURRENT_REFRESHES", 5);
 
     // Elastic Pool Auto-Scaling settings
     public virtual bool EnableElasticPoolAutoScaling => GetConfigValue("ENABLE_ELASTIC_POOL_AUTO_SCALING", false);

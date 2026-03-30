@@ -50,7 +50,7 @@ For the current bottleneck profile, start from this safer operational baseline:
 
 - `SAVE_CHANGES_BATCH_SIZE = 3`
 - `SAVE_CHANGES_MAX_PARALLELISM = 2`
-- Logic App `Foreach` concurrency = `1`
+- Logic App `Foreach` concurrency = `5`
 - `ENABLE_ELASTIC_POOL_AUTO_SCALING = true`
 - production baseline in `docs/app-settings-production.json` enables `ENABLE_AAS_AUTO_SCALING = true` with `AAS_SCALE_UP_SKU = S4`
 

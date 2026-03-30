@@ -450,7 +450,7 @@
                 },
                 "runtimeConfiguration": {
                     "concurrency": {
-                        "repetitions": 1
+                        "repetitions": 5
                     }
                 }
             },

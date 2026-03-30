@@ -69,6 +69,12 @@ public class DHRefreshAASControllerTests
         _mockOperationStorage
             .Setup(x => x.MarkOperationAsFailedAsync(It.IsAny<string>(), It.IsAny<string>()))
             .ReturnsAsync(true);
+        _mockOperationStorage
+            .Setup(x => x.GetRunningOperationCountAsync())
+            .ReturnsAsync(0);
+        _mockConfig
+            .Setup(x => x.MaxConcurrentRefreshes)
+            .Returns(5);
 
         _controller = new DHRefreshAASController(
             _mockConfig.Object,
@@ -270,6 +276,9 @@ public class DHRefreshAASControllerTests
             .Callback<OperationStatus>(op => storedOperation = op)
             .ReturnsAsync(true);
         _mockOperationStorage
+            .Setup(x => x.GetRunningOperationCountAsync())
+            .ReturnsAsync(0);
+        _mockOperationStorage
             .Setup(x => x.TryAcquireQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => acquireCalls++ == 0);
         _mockOperationStorage
@@ -349,6 +358,9 @@ public class DHRefreshAASControllerTests
             .Setup(x => x.UpsertOperationAsync(It.IsAny<OperationStatus>()))
             .Callback<OperationStatus>(op => currentOperationId = op.OperationId)
             .ReturnsAsync(true);
+        _mockOperationStorage
+            .Setup(x => x.GetRunningOperationCountAsync())
+            .ReturnsAsync(0);
         _mockOperationStorage
             .Setup(x => x.TryAcquireQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => acquireCalls++ == 0);

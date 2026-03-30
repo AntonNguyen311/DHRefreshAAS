@@ -285,6 +285,30 @@ public class OperationStorageService
         }
     }
 
+    /// <summary>
+    /// Get the count of currently running operations (across all queue scopes)
+    /// </summary>
+    public virtual async Task<int> GetRunningOperationCountAsync()
+    {
+        try
+        {
+            await EnsureTableInitializedAsync();
+            var count = 0;
+            await foreach (var _ in _tableClient.QueryAsync<OperationEntity>(
+                filter: $"PartitionKey eq '{OperationPartitionKey}' and Status eq '{OperationStatusEnum.Running}'",
+                select: new[] { "PartitionKey" }))
+            {
+                count++;
+            }
+            return count;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to count running operations: {ErrorMessage}", ex.Message);
+            return 0;
+        }
+    }
+
     public virtual async Task<List<OperationStatus>> GetQueuedOperationsAsync(string queueScope)
     {
         try

@@ -103,7 +103,7 @@ That means cross-environment data source routing is part of the production risk 
 The current live baseline keeps cube refreshes serialized inside the workflow:
 
 - `docs/LogicApp_RefreshCube_Workflow.json`
-- `runtimeConfiguration.concurrency.repetitions = 1`
+- `runtimeConfiguration.concurrency.repetitions = 5`
 
 ### Function host timeout
 
