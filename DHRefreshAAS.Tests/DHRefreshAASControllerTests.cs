@@ -36,10 +36,10 @@ public class DHRefreshAASControllerTests
     {
         _mockConfig = new Mock<ConfigurationService>(Mock.Of<IConfiguration>(), Mock.Of<ILogger<ConfigurationService>>());
         _mockConnectionService = new Mock<ConnectionService>(_mockConfig.Object, Mock.Of<ILogger<ConnectionService>>());
-        _mockAasRefreshService = new Mock<AasRefreshService>(_mockConfig.Object, _mockConnectionService.Object, new Mock<AasScalingService>(_mockConfig.Object, Mock.Of<ILogger<AasScalingService>>()).Object, new Mock<ElasticPoolScalingService>(_mockConfig.Object, Mock.Of<ILogger<ElasticPoolScalingService>>()).Object, new RefreshConcurrencyService(Mock.Of<ILogger<RefreshConcurrencyService>>()), Mock.Of<ILogger<AasRefreshService>>());
+        _mockOperationStorage = new Mock<OperationStorageService>(Mock.Of<ILogger<OperationStorageService>>());
+        _mockAasRefreshService = new Mock<AasRefreshService>(_mockConfig.Object, _mockConnectionService.Object, new Mock<AasScalingService>(_mockConfig.Object, Mock.Of<ILogger<AasScalingService>>()).Object, new Mock<ElasticPoolScalingService>(_mockConfig.Object, Mock.Of<ILogger<ElasticPoolScalingService>>()).Object, new RefreshConcurrencyService(Mock.Of<ILogger<RefreshConcurrencyService>>()), _mockOperationStorage.Object, Mock.Of<ILogger<AasRefreshService>>());
         _mockScalingService = new Mock<AasScalingService>(_mockConfig.Object, Mock.Of<ILogger<AasScalingService>>());
         _mockElasticPoolScalingService = new Mock<ElasticPoolScalingService>(_mockConfig.Object, Mock.Of<ILogger<ElasticPoolScalingService>>());
-        _mockOperationStorage = new Mock<OperationStorageService>(Mock.Of<ILogger<OperationStorageService>>());
         _mockProgressTracking = new Mock<ProgressTrackingService>(Mock.Of<ILogger<ProgressTrackingService>>());
         _mockErrorHandling = new Mock<ErrorHandlingService>(Mock.Of<ILogger<ErrorHandlingService>>());
         _mockRequestProcessing = new Mock<RequestProcessingService>(Mock.Of<ILogger<RequestProcessingService>>());

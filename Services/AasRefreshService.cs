@@ -1,6 +1,7 @@
 using Microsoft.AnalysisServices.Tabular;
 using Microsoft.Extensions.Logging;
 using DHRefreshAAS.Models;
+using DHRefreshAAS.Services;
 using Polly;
 using Polly.Retry;
 
@@ -16,6 +17,7 @@ public class AasRefreshService
     private readonly AasScalingService _scalingService;
     private readonly ElasticPoolScalingService _elasticPoolScalingService;
     private readonly RefreshConcurrencyService _concurrencyService;
+    private readonly OperationStorageService _operationStorage;
     private readonly ILogger<AasRefreshService> _logger;
 
     public AasRefreshService(
@@ -24,6 +26,7 @@ public class AasRefreshService
         AasScalingService scalingService,
         ElasticPoolScalingService elasticPoolScalingService,
         RefreshConcurrencyService concurrencyService,
+        OperationStorageService operationStorage,
         ILogger<AasRefreshService> logger)
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -31,12 +34,14 @@ public class AasRefreshService
         ArgumentNullException.ThrowIfNull(scalingService);
         ArgumentNullException.ThrowIfNull(elasticPoolScalingService);
         ArgumentNullException.ThrowIfNull(concurrencyService);
+        ArgumentNullException.ThrowIfNull(operationStorage);
         ArgumentNullException.ThrowIfNull(logger);
         _config = config;
         _connectionService = connectionService;
         _scalingService = scalingService;
         _elasticPoolScalingService = elasticPoolScalingService;
         _concurrencyService = concurrencyService;
+        _operationStorage = operationStorage;
         _logger = logger;
     }
 
@@ -235,11 +240,22 @@ public class AasRefreshService
             await _connectionService.SafeDisconnectAsync(asSrv);
 
             // ALWAYS scale down - even if refresh fails, crashes, or times out
+            // BUT only if no other operations are still running (parallel per-database queues)
             if (scaledUp)
             {
                 try
                 {
-                    await _scalingService.ScaleDownAsync(CancellationToken.None);
+                    var otherRunning = await _operationStorage.GetRunningOperationCountAsync();
+                    if (otherRunning <= 0)
+                    {
+                        await _scalingService.ScaleDownAsync(CancellationToken.None);
+                    }
+                    else
+                    {
+                        _logger.LogInformation(
+                            "Skipping inline AAS scale-down: {RunningCount} other operation(s) still running. Logic App Scale_Down will handle it.",
+                            otherRunning);
+                    }
                 }
                 catch (Exception scaleEx)
                 {
@@ -253,7 +269,17 @@ public class AasRefreshService
             {
                 try
                 {
-                    await _elasticPoolScalingService.ScaleDownAsync(CancellationToken.None);
+                    var otherRunning = await _operationStorage.GetRunningOperationCountAsync();
+                    if (otherRunning <= 0)
+                    {
+                        await _elasticPoolScalingService.ScaleDownAsync(CancellationToken.None);
+                    }
+                    else
+                    {
+                        _logger.LogInformation(
+                            "Skipping inline Elastic Pool scale-down: {RunningCount} other operation(s) still running.",
+                            otherRunning);
+                    }
                 }
                 catch (Exception scaleEx)
                 {

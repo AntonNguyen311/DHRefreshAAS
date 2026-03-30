@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build:*)",
+      "Bash(dotnet test:*)",
+      "WebFetch(domain:vn-fa-sa-sdp-p-aas-bbckcyaxbnahd5cq.southeastasia-01.azurewebsites.net)",
+      "Bash(curl:*)",
+      "Bash(dotnet add:*)",
+      "Bash(wc -l Controllers/DHRefreshAASController.cs Services/*.cs)",
+      "Bash(dotnet remove:*)",
+      "Bash(gh run:*)",
+      "Bash(python3 -c \":*)",
+      "WebFetch(domain:vn-fa-sa-sdp-p-aas.azurewebsites.net)",
+      "Bash(python -m json.tool)",
+      "Bash(python -c \":*)",
+      "Bash(where sqlcmd:*)",
+      "Bash(sqlcmd:*)",
+      "Bash(sqlcmd -S \"tcp:vn-sql-sa-sdp-solution-p-01.database.windows.net,1433\" -d \"master\" -U '$\\(sqlServerUsername\\)' -P 'Jh7LQPPYCEaBvU.yUVuo' -Q \"SELECT ep.name, ep.edition, ep.dtu_max, ep.storage_mb, ep.database_dtu_min, ep.database_dtu_max FROM sys.elastic_pool_resource_stats ep WHERE ep.elastic_pool_name IS NOT NULL ORDER BY ep.end_time DESC\" -s \"|\" -W)",
+      "Bash(sqlcmd -S \"tcp:vn-sql-sa-sdp-solution-p-01.database.windows.net,1433\" -d \"master\" -U '$\\(sqlServerUsername\\)' -P 'Jh7LQPPYCEaBvU.yUVuo' -Q \"SELECT TOP 10 elastic_pool_name, end_time, avg_cpu_percent, avg_data_io_percent, avg_log_write_percent, elastic_pool_dtu_limit, elastic_pool_storage_limit_mb FROM sys.elastic_pool_resource_stats ORDER BY end_time DESC\" -s \"|\" -W)",
+      "Bash(python:*)",
+      "Bash(python3 -m json.tool)",
+      "Bash(az account:*)",
+      "Bash(sqlcmd -S \"vn-sql-sa-sdp-solution-p-01.database.windows.net\" -U '$\\(sqlServerUsername\\)' -P 'Jh7LQPPYCEaBvU.yUVuo' -d \"datalakeprod\" -Q \":*)",
+      "Bash(python3 -c \"import json; json.load\\(open\\(''docs/LogicApp_RefreshCube_Workflow.json''\\)\\); print\\(''Valid JSON''\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''DAModel \\(30 tables\\): {d[\"\"status\"\"]} - {d[\"\"progress\"\"][\"\"percentage\"\"]}% - {d[\"\"elapsedMinutes\"\"]}min''''\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''Op2 \\(13 tables\\): {d[\"\"status\"\"]} - {d[\"\"progress\"\"][\"\"percentage\"\"]}% - {d[\"\"elapsedMinutes\"\"]}min''''\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''Op3 \\(3 tables\\): {d[\"\"status\"\"]} - {d[\"\"progress\"\"][\"\"percentage\"\"]}% - {d[\"\"elapsedMinutes\"\"]}min''''\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''Op4 \\(1 table\\): {d[\"\"status\"\"]} - {d[\"\"progress\"\"][\"\"percentage\"\"]}% - {d[\"\"elapsedMinutes\"\"]}min''''\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''DAModel \\(30\\): {d[\"\"status\"\"]} - {d[\"\"progress\"\"][\"\"percentage\"\"]}% - {d[\"\"elapsedMinutes\"\"]}min - completed:{d[\"\"progress\"\"][\"\"completed\"\"]} failed:{d[\"\"progress\"\"][\"\"failed\"\"]}''''\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''Op2 \\(13\\): {d[\"\"status\"\"]} - {d[\"\"progress\"\"][\"\"percentage\"\"]}% - {d[\"\"elapsedMinutes\"\"]}min - completed:{d[\"\"progress\"\"][\"\"completed\"\"]} failed:{d[\"\"progress\"\"][\"\"failed\"\"]}''''\\)\")",
+      "WebSearch",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k:v for k,v in d.items\\(\\) if k in [''''status'''',''''runningOperations'''',''''totalOperations'''']}, indent=2\\)\\)\")",
+      "Bash(for id:*)",
+      "Bash(do curl:*)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''Status: {d[\"\"status\"\"]}, Elapsed: {d[\"\"elapsedMinutes\"\"]:.1f}min, Completed: {d[\"\"progress\"\"][\"\"completed\"\"]}/{d[\"\"tablesCount\"\"]}, Phase: {d[\"\"progress\"\"][\"\"currentPhase\"\"]}''''\\)\")",
+      "Bash(grep -r \"DatabaseName\" /c/Users/Anton.Tuan/Dropbox/Workspace/Azure Functions/DHRefreshAAS/Services/*.cs --include=\"*.cs\")",
+      "Bash(find 'C:\\\\Users\\\\Anton.Tuan\\\\Dropbox\\\\Workspace\\\\Azure Functions\\\\DHRefreshAAS/docs' -type f -name *.json)"
+    ]
+  }
+}
