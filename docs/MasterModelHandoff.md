@@ -4,6 +4,8 @@ This is the single-file handoff for `DHRefreshAAS`.
 
 If another model needs to continue work on this project, this is the first file to read. It is written to be self-contained enough that the model can understand the project, the live environment, the current safe operating baseline, the main risks, and the intended direction without reconstructing the full prior session history.
 
+If the task is specifically about Azure Data Factory orchestration, read `docs/ADF_ArchitectureAndRunbook.md` immediately after this file.
+
 ## 1. What This Project Is
 
 `DHRefreshAAS` is a .NET 8 Azure Functions app that orchestrates Azure Analysis Services refreshes.
@@ -487,6 +489,7 @@ az account show -o json
 
 This file is intended to be enough on its own, but these supporting documents exist for deeper detail:
 
+- `docs/ADF_ArchitectureAndRunbook.md`
 - `docs/ProjectSessionResume.md`
 - `docs/AzureCliAndDatabaseOperations.md`
 - `docs/SaveChangesFailureEvidence.md`

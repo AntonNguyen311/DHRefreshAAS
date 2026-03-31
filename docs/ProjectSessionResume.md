@@ -6,6 +6,8 @@ If another model needs one single file to understand the whole project and curre
 
 For the exact Azure CLI, PowerShell, Logic App, and SQL execution steps used in practice, then read `docs/AzureCliAndDatabaseOperations.md`.
 
+For the live ADF orchestration chain, duplicate-run protections, recovery model, and current operator checks, read `docs/ADF_ArchitectureAndRunbook.md`.
+
 ## Project Summary
 
 `DHRefreshAAS` is a .NET 8 Azure Functions app that orchestrates Azure Analysis Services refreshes, persists operation status in Azure Table Storage, and is driven by Logic Apps plus SQL mapping/policy metadata.
@@ -44,6 +46,7 @@ Core runtime pieces:
 - `RefreshCube_New` -> workflow key `sql-1`, bound to SQL connection resource `sql-2`
 
 Use `docs/EnvironmentRoutingAudit.md` when the question is specifically about model/data source/environment routing.
+Use `docs/ADF_ArchitectureAndRunbook.md` when the question is specifically about the ADF side of the ETL/master/refresh orchestration.
 
 ## Refresh Flow
 

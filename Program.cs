@@ -9,6 +9,7 @@ var host = new HostBuilder()
     .ConfigureFunctionsWebApplication()
     .ConfigureServices(services =>
     {
+        services.AddHttpClient();
         // Register configuration services
         services.AddSingleton<ConfigurationService>();
         services.AddSingleton<ConnectionService>();
@@ -24,6 +25,10 @@ var host = new HostBuilder()
         services.AddSingleton<ErrorHandlingService>();
         services.AddSingleton<RequestProcessingService>();
         services.AddSingleton<ResponseService>();
+        services.AddSingleton<PortalAuthService>();
+        services.AddSingleton<SelfServiceMetadataService>();
+        services.AddSingleton<AdfOrchestratorGateService>();
+        services.AddSingleton<AdfOrchestratorController>();
         services.AddSingleton<DHRefreshAASController>();
     })
     .Build();
