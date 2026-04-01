@@ -286,7 +286,8 @@
                                                             "tableName": "@{items('For_each_SlowTable')?['tableName']}",
                                                             "partitionName": "@{items('For_each_SlowTable')?['partitionName']}",
                                                             "processingTimeSeconds": "@{items('For_each_SlowTable')?['processingTimeSeconds']}",
-                                                            "rowCount": "@{items('For_each_SlowTable')?['rowCount']}"
+                                                            "rowCount": "@{items('For_each_SlowTable')?['rowCount']}",
+                                                            "severity": "@{items('For_each_SlowTable')?['severity']}"
                                                         }
                                                     }
                                                 }
@@ -472,34 +473,24 @@
                     ]
                 }
             },
-            "Build_Slow_Tables": {
-                "type": "Select",
+            "Format_Slow_Tables_HTML": {
+                "type": "Function",
                 "inputs": {
-                    "from": "@variables('varSlowTables')",
-                    "select": {
-                        "Database": "@item()?['database']",
-                        "Table": "@item()?['tableName']",
-                        "Partition": "@item()?['partitionName']",
-                        "Processing Time (s)": "@item()?['processingTimeSeconds']",
-                        "Row Count": "@item()?['rowCount']"
+                    "body": {
+                        "rows": "@variables('varSlowTables')"
+                    },
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "method": "POST",
+                    "function": {
+                        "id": "/subscriptions/8730775e-045c-47d1-a080-e3b9882cec01/resourceGroups/vn-rg-sa-sdp-solution-p/providers/Microsoft.Web/sites/vn-fa-sa-sdp-p-aas/functions/DHRefreshAAS_FormatSlowTablesHtml"
                     }
                 },
                 "runAfter": {
                     "Scale_Down": [
                         "Succeeded",
                         "Failed"
-                    ]
-                }
-            },
-            "Create_Slow_Tables_HTML": {
-                "type": "Table",
-                "inputs": {
-                    "from": "@body('Build_Slow_Tables')",
-                    "format": "HTML"
-                },
-                "runAfter": {
-                    "Build_Slow_Tables": [
-                        "Succeeded"
                     ]
                 }
             },
@@ -515,7 +506,7 @@
                     "body": {
                         "To": "mina.my@deheus.com; Gina.Hai@deheus.com; Anton.Tuan@deheus.com",
                         "Subject": "Refresh Cube Summary - @{utcNow()}",
-                        "Body": "<h2 class=\"editor-heading-h2\">Refresh Cube Summary Report</h2><p class=\"editor-paragraph\">Total databases processed: @{length(variables('varDatabaseResults'))}</p><h3 class=\"editor-heading-h3\">Database Results@{body('Create_Summary_HTML')}<br></h3><h3 class=\"editor-heading-h3\">Top Slow Tables (for optimization)@{if(equals(length(variables('varSlowTables')), 0), '<p style=\"color: #7f8c8d;\">No slow table data available.</p>', body('Create_Slow_Tables_HTML'))}<br></h3><p class=\"editor-paragraph\">Best regards,<br><b><strong class=\"editor-text-bold\">Data Team</strong></b></p><br>",
+                        "Body": "<h2 class=\"editor-heading-h2\">Refresh Cube Summary Report</h2><p class=\"editor-paragraph\">Total databases processed: @{length(variables('varDatabaseResults'))}</p><h3 class=\"editor-heading-h3\">Database Results@{body('Create_Summary_HTML')}<br></h3><h3 class=\"editor-heading-h3\">Top Slow Tables (for optimization)@{if(equals(length(variables('varSlowTables')), 0), '<p style=\"color: #7f8c8d;\">No slow table data available.</p>', body('Format_Slow_Tables_HTML')?['html'])}<br></h3><p class=\"editor-paragraph\">Best regards,<br><b><strong class=\"editor-text-bold\">Data Team</strong></b></p><br>",
                         "From": "DataAnalyticsServices@deheus.com",
                         "Importance": "Normal"
                     },
@@ -525,7 +516,7 @@
                     "Create_Summary_HTML": [
                         "Succeeded"
                     ],
-                    "Create_Slow_Tables_HTML": [
+                    "Format_Slow_Tables_HTML": [
                         "Succeeded"
                     ]
                 }

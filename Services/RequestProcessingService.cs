@@ -46,6 +46,11 @@ public class RequestProcessingService
             return null;
         }
 
+        return ValidateRequestData(requestData);
+    }
+
+    public virtual PostData? ValidateRequestData(PostData? requestData)
+    {
         if (requestData?.DatabaseName == null)
         {
             _logger.LogWarning("Database name is null");

@@ -58,6 +58,24 @@ public class ConfigurationService
         return defaultValue;
     }
 
+    public virtual IReadOnlyList<string> GetConfigList(string key)
+    {
+        var value = _configuration[key];
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return Array.Empty<string>();
+        }
+
+        var parts = value
+            .Split(new[] { ',', ';', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        _logger.LogDebug("Configuration {Key} loaded with {Count} entries", key, parts.Length);
+        return parts;
+    }
+
     // Configuration constants with fallback values
     public virtual int MaxRetryAttempts => GetConfigValue("MAX_RETRY_ATTEMPTS", 3);
     public virtual int BaseDelaySeconds => GetConfigValue("BASE_DELAY_SECONDS", 30);
@@ -77,6 +95,8 @@ public class ConfigurationService
     public virtual int HeartbeatIntervalSeconds => GetConfigValue("HEARTBEAT_INTERVAL_SECONDS", 30);
     public virtual int ZombieTimeoutMinutes => GetConfigValue("ZOMBIE_TIMEOUT_MINUTES", 30);
     public virtual int MaxConcurrentRefreshes => GetConfigValue("MAX_CONCURRENT_REFRESHES", 5);
+    public virtual int SlowTableWarningSeconds => GetConfigValue("SLOW_TABLE_WARNING_SECONDS", 120);
+    public virtual int SlowTableCriticalSeconds => GetConfigValue("SLOW_TABLE_CRITICAL_SECONDS", 300);
 
     // Elastic Pool Auto-Scaling settings
     public virtual bool EnableElasticPoolAutoScaling => GetConfigValue("ENABLE_ELASTIC_POOL_AUTO_SCALING", false);
@@ -94,6 +114,16 @@ public class ConfigurationService
     public virtual string AasUserId => GetConfigValue("AAS_USER_ID", ""); // For ServicePrincipal: client id; For UserPassword: UPN
     public virtual string AasPassword => GetConfigValue("AAS_PASSWORD", ""); // For ServicePrincipal: client secret; For UserPassword: password
     public virtual string AasTenantId => GetConfigValue("AAS_TENANT_ID", "");
+
+    // Self-service portal settings
+    public virtual string SelfServiceSqlConnectionString => GetConfigValue("SELF_SERVICE_SQL_CONNECTION_STRING", "");
+    public virtual string SelfServiceSqlDatabaseName => GetConfigValue("SELF_SERVICE_SQL_DATABASE_NAME", "datalakeprod");
+    public virtual IReadOnlyList<string> PortalMetadataRoles => GetConfigList("PORTAL_METADATA_ROLES");
+    public virtual IReadOnlyList<string> PortalRefreshRoles => GetConfigList("PORTAL_REFRESH_ROLES");
+    public virtual IReadOnlyList<string> PortalAdminRoles => GetConfigList("PORTAL_ADMIN_ROLES");
+    public virtual IReadOnlyList<string> PortalMetadataGroups => GetConfigList("PORTAL_METADATA_GROUP_IDS");
+    public virtual IReadOnlyList<string> PortalRefreshGroups => GetConfigList("PORTAL_REFRESH_GROUP_IDS");
+    public virtual IReadOnlyList<string> PortalAdminGroups => GetConfigList("PORTAL_ADMIN_GROUP_IDS");
 
     /// <summary>MSOLAP Connect Timeout (seconds); clamp 30–3600.</summary>
     public virtual int GetConnectTimeoutSeconds(int connectionTimeoutMinutes)

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DH Refresh Portal</title>
+    <link rel="stylesheet" href="./styles.css" />
+</head>
+<body class="auth-page">
+    <main class="auth-layout">
+        <section class="auth-card auth-hero">
+            <p class="eyebrow">DH Refresh Portal</p>
+            <h1>Sign in to refresh approved AAS models, tables, and partitions</h1>
+            <p class="lead">
+                Use your Microsoft Entra account to open the self-service dashboard, browse the metadata you are allowed to use,
+                and trigger refreshes safely.
+            </p>
+
+            <div class="button-row">
+                <button id="signInButton" type="button">Sign In with Microsoft</button>
+                <button id="openDashboardButton" type="button" class="secondary" disabled>Open Dashboard</button>
+            </div>
+
+            <p id="loginStatus" class="muted">Sign in to continue.</p>
+        </section>
+
+        <section class="auth-card">
+            <h2>What You Can Do</h2>
+            <div class="feature-grid">
+                <article class="feature-item">
+                    <h3>Browse Allowed Metadata</h3>
+                    <p>Load only the models, tables, and partitions approved for self-service refresh.</p>
+                </article>
+                <article class="feature-item">
+                    <h3>Submit Refresh Requests</h3>
+                    <p>Trigger refreshes from a guided dashboard instead of manually calling the Function App.</p>
+                </article>
+                <article class="feature-item">
+                    <h3>Track Recent Activity</h3>
+                    <p>View your latest operations and inspect the current status of each submitted request.</p>
+                </article>
+            </div>
+        </section>
+    </main>
+
+    <script src="./msal-browser.min.js"></script>
+    <script src="./config.js"></script>
+    <script src="./login.js"></script>
+</body>
+</html>

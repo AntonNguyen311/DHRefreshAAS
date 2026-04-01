@@ -26,6 +26,8 @@ public class DHRefreshAASIntegrationTests
     private readonly Mock<ErrorHandlingService> _mockErrorHandling;
     private readonly Mock<RequestProcessingService> _mockRequestProcessing;
     private readonly Mock<ResponseService> _mockResponseService;
+    private readonly Mock<PortalAuthService> _mockPortalAuthService;
+    private readonly Mock<SelfServiceMetadataService> _mockSelfServiceMetadataService;
     private readonly Mock<OperationCleanupService> _mockCleanupService;
     private readonly Mock<IHostApplicationLifetime> _mockHostLifetime;
     private readonly Mock<ILogger<DHRefreshAASController>> _mockLogger;
@@ -43,6 +45,8 @@ public class DHRefreshAASIntegrationTests
         _mockErrorHandling = new Mock<ErrorHandlingService>(Mock.Of<ILogger<ErrorHandlingService>>());
         _mockRequestProcessing = new Mock<RequestProcessingService>(Mock.Of<ILogger<RequestProcessingService>>());
         _mockResponseService = new Mock<ResponseService>();
+        _mockPortalAuthService = new Mock<PortalAuthService>(_mockConfig.Object, Mock.Of<ILogger<PortalAuthService>>());
+        _mockSelfServiceMetadataService = new Mock<SelfServiceMetadataService>(_mockConfig.Object, _mockConnectionService.Object, Mock.Of<ILogger<SelfServiceMetadataService>>());
         _mockCleanupService = new Mock<OperationCleanupService>(_mockOperationStorage.Object, _mockConfig.Object, Mock.Of<ILogger<OperationCleanupService>>());
         _mockHostLifetime = new Mock<IHostApplicationLifetime>();
         _mockHostLifetime.Setup(l => l.ApplicationStopping).Returns(CancellationToken.None);
@@ -80,6 +84,8 @@ public class DHRefreshAASIntegrationTests
             _mockErrorHandling.Object,
             _mockRequestProcessing.Object,
             _mockResponseService.Object,
+            _mockPortalAuthService.Object,
+            _mockSelfServiceMetadataService.Object,
             _mockCleanupService.Object,
             _mockHostLifetime.Object,
             _mockLogger.Object);

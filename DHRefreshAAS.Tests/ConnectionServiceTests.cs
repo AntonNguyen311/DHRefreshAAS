@@ -119,6 +119,20 @@ public class ConnectionServiceTests
     }
 
     [Fact]
+    public void GetAdomdConnectionString_UsesRuntimeDatabaseOverride()
+    {
+        // Arrange
+        SetupConfigForConnectionString("ServicePrincipal");
+
+        // Act
+        var connectionString = _service.GetAdomdConnectionString("runtime-db");
+
+        // Assert
+        Assert.Contains("Initial Catalog=runtime-db;", connectionString);
+        Assert.DoesNotContain("Initial Catalog=testdb;", connectionString);
+    }
+
+    [Fact]
     public void BuildConnectionString_UnsupportedAuthMode_ThrowsInvalidOperationException()
     {
         // Arrange
@@ -309,8 +323,12 @@ public class ConnectionServiceTests
 
     private string GetConnectionString()
     {
-        var method = typeof(ConnectionService).GetMethod("BuildConnectionString",
-            BindingFlags.NonPublic | BindingFlags.Instance);
+        var method = typeof(ConnectionService).GetMethod(
+            "BuildConnectionString",
+            BindingFlags.NonPublic | BindingFlags.Instance,
+            binder: null,
+            types: new[] { typeof(int), typeof(int) },
+            modifiers: null);
         var (connectSec, commandSec) = _configService.GetDefaultClientTimeouts();
         try
         {

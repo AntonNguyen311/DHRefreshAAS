@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text.Json;
@@ -29,6 +31,8 @@ public class DHRefreshAASController
     private readonly ErrorHandlingService _errorHandling;
     private readonly RequestProcessingService _requestProcessing;
     private readonly ResponseService _responseService;
+    private readonly PortalAuthService _portalAuthService;
+    private readonly SelfServiceMetadataService _selfServiceMetadataService;
     private readonly OperationCleanupService _cleanupService;
     private readonly IHostApplicationLifetime _hostApplicationLifetime;
     private readonly ILogger<DHRefreshAASController> _logger;
@@ -44,6 +48,8 @@ public class DHRefreshAASController
         ErrorHandlingService errorHandling,
         RequestProcessingService requestProcessing,
         ResponseService responseService,
+        PortalAuthService portalAuthService,
+        SelfServiceMetadataService selfServiceMetadataService,
         OperationCleanupService cleanupService,
         IHostApplicationLifetime hostApplicationLifetime,
         ILogger<DHRefreshAASController> logger)
@@ -58,6 +64,8 @@ public class DHRefreshAASController
         _errorHandling = errorHandling;
         _requestProcessing = requestProcessing;
         _responseService = responseService;
+        _portalAuthService = portalAuthService;
+        _selfServiceMetadataService = selfServiceMetadataService;
         _cleanupService = cleanupService;
         _hostApplicationLifetime = hostApplicationLifetime;
         _logger = logger;
@@ -170,6 +178,215 @@ public class DHRefreshAASController
         catch (Exception ex)
         {
             return await _errorHandling.HandleExceptionAsync(req, ex, "status check");
+        }
+    }
+
+    [Function("DHRefreshAAS_PortalModels")]
+    public async Task<HttpResponseData> PortalListModels(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestData req,
+        FunctionContext context)
+    {
+        var user = _portalAuthService.GetPortalUser(req);
+        if (user == null)
+        {
+            return await _responseService.CreateUnauthorizedResponseAsync(req, "Portal authentication is required.");
+        }
+
+        if (!_portalAuthService.CanReadMetadata(user))
+        {
+            return await _responseService.CreateForbiddenResponseAsync(req, "You are not allowed to browse refresh metadata.");
+        }
+
+        try
+        {
+            var models = await _selfServiceMetadataService.GetAllowedModelsAsync(context.CancellationToken);
+            return await _responseService.CreateSuccessResponseAsync(req, new { user, models });
+        }
+        catch (Exception ex)
+        {
+            return await _errorHandling.HandleExceptionAsync(req, ex, "portal model discovery");
+        }
+    }
+
+    [Function("DHRefreshAAS_PortalTables")]
+    public async Task<HttpResponseData> PortalListTables(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestData req,
+        FunctionContext context)
+    {
+        var user = _portalAuthService.GetPortalUser(req);
+        if (user == null)
+        {
+            return await _responseService.CreateUnauthorizedResponseAsync(req, "Portal authentication is required.");
+        }
+
+        if (!_portalAuthService.CanReadMetadata(user))
+        {
+            return await _responseService.CreateForbiddenResponseAsync(req, "You are not allowed to browse refresh metadata.");
+        }
+
+        var query = HttpUtility.ParseQueryString(req.Url.Query);
+        var databaseName = query["databaseName"];
+        if (string.IsNullOrWhiteSpace(databaseName))
+        {
+            return await _responseService.CreateBadRequestResponseAsync(req, "Query parameter 'databaseName' is required.");
+        }
+
+        try
+        {
+            var tables = await _selfServiceMetadataService.GetAllowedTablesAsync(databaseName, context.CancellationToken);
+            return await _responseService.CreateSuccessResponseAsync(req, new
+            {
+                databaseName,
+                user,
+                tables
+            });
+        }
+        catch (Exception ex)
+        {
+            return await _errorHandling.HandleExceptionAsync(req, ex, "portal table discovery");
+        }
+    }
+
+    [Function("DHRefreshAAS_PortalPartitions")]
+    public async Task<HttpResponseData> PortalListPartitions(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestData req,
+        FunctionContext context)
+    {
+        var user = _portalAuthService.GetPortalUser(req);
+        if (user == null)
+        {
+            return await _responseService.CreateUnauthorizedResponseAsync(req, "Portal authentication is required.");
+        }
+
+        if (!_portalAuthService.CanReadMetadata(user))
+        {
+            return await _responseService.CreateForbiddenResponseAsync(req, "You are not allowed to browse refresh metadata.");
+        }
+
+        var query = HttpUtility.ParseQueryString(req.Url.Query);
+        var databaseName = query["databaseName"];
+        var tableName = query["tableName"];
+        if (string.IsNullOrWhiteSpace(databaseName) || string.IsNullOrWhiteSpace(tableName))
+        {
+            return await _responseService.CreateBadRequestResponseAsync(req, "Query parameters 'databaseName' and 'tableName' are required.");
+        }
+
+        try
+        {
+            var partitions = await _selfServiceMetadataService.GetAllowedPartitionsAsync(databaseName, tableName, context.CancellationToken);
+            if (partitions == null)
+            {
+                return await _responseService.CreateNotFoundResponseAsync(req, "Allowed table", $"{databaseName}/{tableName}");
+            }
+
+            return await _responseService.CreateSuccessResponseAsync(req, new { user, data = partitions });
+        }
+        catch (Exception ex)
+        {
+            return await _errorHandling.HandleExceptionAsync(req, ex, "portal partition discovery");
+        }
+    }
+
+    [Function("DHRefreshAAS_PortalSubmitRefresh")]
+    public async Task<HttpResponseData> PortalSubmitRefresh(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "post")] HttpRequestData req,
+        FunctionContext context)
+    {
+        var logger = context.GetLogger<DHRefreshAASController>();
+        var user = _portalAuthService.GetPortalUser(req);
+        if (user == null)
+        {
+            return await _responseService.CreateUnauthorizedResponseAsync(req, "Portal authentication is required.");
+        }
+
+        if (!_portalAuthService.CanSubmitRefresh(user))
+        {
+            return await _responseService.CreateForbiddenResponseAsync(req, "You are not allowed to submit refreshes.");
+        }
+
+        try
+        {
+            string body;
+            using (var reader = new StreamReader(req.Body))
+            {
+                body = await reader.ReadToEndAsync();
+            }
+
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                return await _responseService.CreateBadRequestResponseAsync(req, "Request body is required.");
+            }
+
+            var portalRequest = JsonSerializer.Deserialize<PortalRefreshRequest>(body, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+            var requestData = _requestProcessing.ValidateRequestData(portalRequest?.ToPostData());
+            if (requestData == null)
+            {
+                return await _responseService.CreateBadRequestResponseAsync(req, "Invalid refresh request.");
+            }
+
+            var validation = await _selfServiceMetadataService.ValidateRefreshRequestAsync(requestData, context.CancellationToken);
+            if (!validation.IsAllowed)
+            {
+                return await _responseService.CreateForbiddenResponseAsync(req, validation.Message);
+            }
+
+            var enhancedRequestData = _requestProcessing.CreateEnhancedRequestData(requestData, _config);
+            var estimatedDurationMinutes = _requestProcessing.EstimateOperationDuration(requestData);
+            logger.LogInformation(
+                "Portal refresh requested by {UserEmail} for database {DatabaseName}",
+                user.Email,
+                requestData.DatabaseName);
+
+            return await StartAsyncOperation(
+                requestData,
+                enhancedRequestData,
+                estimatedDurationMinutes,
+                req,
+                logger,
+                user,
+                "portal",
+                "/api/DHRefreshAAS_PortalStatus");
+        }
+        catch (Exception ex)
+        {
+            return await _errorHandling.HandleExceptionAsync(req, ex, "portal refresh submission");
+        }
+    }
+
+    [Function("DHRefreshAAS_PortalStatus")]
+    public async Task<HttpResponseData> PortalStatus(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "get")] HttpRequestData req,
+        FunctionContext context)
+    {
+        var user = _portalAuthService.GetPortalUser(req);
+        if (user == null)
+        {
+            return await _responseService.CreateUnauthorizedResponseAsync(req, "Portal authentication is required.");
+        }
+
+        if (!_portalAuthService.CanReadMetadata(user))
+        {
+            return await _responseService.CreateForbiddenResponseAsync(req, "You are not allowed to view refresh status.");
+        }
+
+        try
+        {
+            var query = HttpUtility.ParseQueryString(req.Url.Query);
+            var operationId = query["operationId"];
+
+            if (!string.IsNullOrWhiteSpace(operationId))
+            {
+                return await GetSpecificOperationStatus(operationId, req, user, true);
+            }
+
+            return await GetGeneralStatus(req, user, true);
+        }
+        catch (Exception ex)
+        {
+            return await _errorHandling.HandleExceptionAsync(req, ex, "portal status check");
         }
     }
 
@@ -335,7 +552,10 @@ public class DHRefreshAASController
         EnhancedPostData enhancedRequestData, 
         int estimatedDurationMinutes, 
         HttpRequestData req, 
-        ILogger logger)
+        ILogger logger,
+        PortalUserContext? requester = null,
+        string requestSource = "api",
+        string statusPath = "/api/DHRefreshAAS_Status")
     {
         var operationId = Guid.NewGuid().ToString();
         var queueScope = BuildQueueScope(requestData.DatabaseName);
@@ -353,7 +573,11 @@ public class DHRefreshAASController
             RefreshObjects = requestData.RefreshObjects,
             QueueScope = queueScope,
             CurrentPhase = OperationPhaseEnum.Queued,
-            RequestPayloadJson = JsonSerializer.Serialize(enhancedRequestData)
+            RequestPayloadJson = JsonSerializer.Serialize(enhancedRequestData),
+            RequestedByUserId = requester?.UserId,
+            RequestedByDisplayName = requester?.DisplayName,
+            RequestedByEmail = requester?.Email,
+            RequestSource = requestSource
         };
 
         await _operationStorage.UpsertOperationAsync(operationStatus);
@@ -365,6 +589,18 @@ public class DHRefreshAASController
             ? "Refresh operation started in background. Use status endpoint to monitor progress."
             : "Refresh request queued behind another active refresh. Use status endpoint to monitor progress and queue position.";
 
+        if (string.Equals(statusPath, "/api/DHRefreshAAS_Status", StringComparison.Ordinal))
+        {
+            return await _responseService.CreateAcceptedResponseAsync(
+                req,
+                operationId,
+                estimatedDurationMinutes,
+                startedImmediately ? OperationStatusEnum.Running : OperationStatusEnum.Queued,
+                acceptedMessage,
+                queuePosition,
+                queueScope);
+        }
+
         return await _responseService.CreateAcceptedResponseAsync(
             req,
             operationId,
@@ -372,7 +608,8 @@ public class DHRefreshAASController
             startedImmediately ? OperationStatusEnum.Running : OperationStatusEnum.Queued,
             acceptedMessage,
             queuePosition,
-            queueScope);
+            queueScope,
+            statusPath);
     }
 
     private void StartQueuedOperationExecution(string operationId, ILogger logger)
@@ -611,11 +848,23 @@ public class DHRefreshAASController
     private TimeSpan GetQueueLeaseStaleAfter() =>
         TimeSpan.FromMinutes(Math.Max(_config.ZombieTimeoutMinutes, _config.OperationTimeoutMinutes) + 5);
 
-    private async Task<HttpResponseData> GetSpecificOperationStatus(string operationId, HttpRequestData req)
+    private async Task<HttpResponseData> GetSpecificOperationStatus(
+        string operationId,
+        HttpRequestData req,
+        PortalUserContext? viewer = null,
+        bool portalView = false)
     {
         var operation = await _operationStorage.GetOperationAsync(operationId);
         if (operation != null)
         {
+            if (portalView &&
+                viewer != null &&
+                !viewer.IsAdmin &&
+                !string.Equals(operation.RequestedByUserId, viewer.UserId, StringComparison.OrdinalIgnoreCase))
+            {
+                return await _responseService.CreateForbiddenResponseAsync(req, "You are not allowed to view this operation.");
+            }
+
             var referenceStart = string.Equals(operation.Status, OperationStatusEnum.Queued, StringComparison.OrdinalIgnoreCase)
                 ? operation.EnqueuedTime
                 : operation.StartTime;
@@ -658,6 +907,14 @@ public class DHRefreshAASController
                 
                 result = operation.Result,
                 topSlowTables = ParseTopSlowTables(operation.Result),
+                performanceWarnings = ParsePerformanceWarnings(operation.Result),
+                requestedBy = new
+                {
+                    userId = operation.RequestedByUserId,
+                    displayName = operation.RequestedByDisplayName,
+                    email = operation.RequestedByEmail
+                },
+                requestSource = operation.RequestSource,
                 lastBatch = operation.LastBatchIndex.HasValue
                     ? new
                     {
@@ -678,10 +935,28 @@ public class DHRefreshAASController
         return await _responseService.CreateNotFoundResponseAsync(req, "Operation", operationId);
     }
 
-    private async Task<HttpResponseData> GetGeneralStatus(HttpRequestData req)
+    private async Task<HttpResponseData> GetGeneralStatus(
+        HttpRequestData req,
+        PortalUserContext? viewer = null,
+        bool portalView = false)
     {
-        var recentOperations = await _operationStorage.GetRecentOperationsAsync(10);
+        var recentOperations = await _operationStorage.GetRecentOperationsAsync(portalView ? 50 : 10);
+        if (portalView && viewer != null && !viewer.IsAdmin)
+        {
+            recentOperations = recentOperations
+                .Where(op => string.Equals(op.RequestedByUserId, viewer.UserId, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
         var operationCounts = await _operationStorage.GetOperationCountsAsync();
+        var visibleCounts = portalView
+            ? (
+                queued: recentOperations.Count(op => string.Equals(op.Status, OperationStatusEnum.Queued, StringComparison.OrdinalIgnoreCase)),
+                running: recentOperations.Count(op => string.Equals(op.Status, OperationStatusEnum.Running, StringComparison.OrdinalIgnoreCase)),
+                completed: recentOperations.Count(op => string.Equals(op.Status, OperationStatusEnum.Completed, StringComparison.OrdinalIgnoreCase)),
+                failed: recentOperations.Count(op => string.Equals(op.Status, OperationStatusEnum.Failed, StringComparison.OrdinalIgnoreCase)),
+                total: recentOperations.Count)
+            : operationCounts;
         
         var recentOperationsData = recentOperations.Select(op => {
             _progressTracking.UpdateProgress(op); // Update progress for each operation
@@ -706,7 +981,13 @@ public class DHRefreshAASController
                     completed = op.TablesCompleted,
                     failed = op.TablesFailed,
                     inProgress = op.TablesInProgress
-                }
+                },
+                requestedBy = new {
+                    userId = op.RequestedByUserId,
+                    displayName = op.RequestedByDisplayName,
+                    email = op.RequestedByEmail
+                },
+                requestSource = op.RequestSource
             };
         }).ToList();
             
@@ -714,22 +995,68 @@ public class DHRefreshAASController
         {
             timestamp = DateTime.UtcNow,
             status = "Function is running",
-            totalOperations = operationCounts.total,
-            queuedOperations = operationCounts.queued,
-            runningOperations = operationCounts.running,
-            completedOperations = operationCounts.completed,
-            failedOperations = operationCounts.failed,
+            totalOperations = visibleCounts.total,
+            queuedOperations = visibleCounts.queued,
+            runningOperations = visibleCounts.running,
+            completedOperations = visibleCounts.completed,
+            failedOperations = visibleCounts.failed,
+            viewer,
             recentOperations = recentOperationsData,
             endpoints = new {
                 test_token = "/api/DHRefreshAAS_TestToken",
                 test_connection = "/api/DHRefreshAAS_TestConnection", 
                 refresh = "/api/DHRefreshAAS_HttpStart",
                 status = "/api/DHRefreshAAS_Status",
-                specific_status = "/api/DHRefreshAAS_Status?operationId=YOUR_OPERATION_ID"
+                specific_status = "/api/DHRefreshAAS_Status?operationId=YOUR_OPERATION_ID",
+                format_slow_tables_html = "/api/DHRefreshAAS_FormatSlowTablesHtml",
+                portal_models = "/api/DHRefreshAAS_PortalModels",
+                portal_tables = "/api/DHRefreshAAS_PortalTables?databaseName=YOUR_DATABASE",
+                portal_partitions = "/api/DHRefreshAAS_PortalPartitions?databaseName=YOUR_DATABASE&tableName=YOUR_TABLE",
+                portal_submit_refresh = "/api/DHRefreshAAS_PortalSubmitRefresh",
+                portal_status = "/api/DHRefreshAAS_PortalStatus"
             }
         };
         
         return await _responseService.CreateStatusResponseAsync(req, statusData);
+    }
+
+    /// <summary>
+    /// Builds per-database HTML for slow-table summary emails (used by Logic Apps).
+    /// </summary>
+    [Function("DHRefreshAAS_FormatSlowTablesHtml")]
+    public async Task<HttpResponseData> FormatSlowTablesHtml(
+        [HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequestData req,
+        FunctionContext context)
+    {
+        var logger = context.GetLogger<DHRefreshAASController>();
+        logger.LogInformation("Format slow tables HTML requested");
+
+        try
+        {
+            string body;
+            using (var reader = new StreamReader(req.Body))
+            {
+                body = await reader.ReadToEndAsync();
+            }
+
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                var emptyHtml = SlowTablesHtmlFormatter.BuildHtml(null);
+                return await _responseService.CreateSuccessResponseAsync(req, new { html = emptyHtml });
+            }
+
+            var parsed = JsonSerializer.Deserialize<FormatSlowTablesHtmlRequest>(body, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            var html = SlowTablesHtmlFormatter.BuildHtml(parsed?.Rows);
+            return await _responseService.CreateSuccessResponseAsync(req, new { html });
+        }
+        catch (Exception ex)
+        {
+            return await _errorHandling.HandleExceptionAsync(req, ex, "format slow tables html");
+        }
     }
 
     private static object[]? ParseTopSlowTables(string? resultJson)
@@ -741,18 +1068,57 @@ public class DHRefreshAASController
             if (!doc.RootElement.TryGetProperty("topSlowTables", out var slowTables))
                 return null;
 
-            var list = new List<object>();
+            var rows = new List<(double SortKey, object Row)>();
             foreach (var item in slowTables.EnumerateArray())
             {
-                list.Add(new
+                var secs = item.TryGetProperty("processingTimeSeconds", out var t) ? t.GetDouble() : 0;
+                var row = new
                 {
+                    databaseName = item.TryGetProperty("databaseName", out var dn) ? dn.GetString() ?? "" : "",
                     tableName = item.TryGetProperty("tableName", out var tn) ? tn.GetString() ?? "" : "",
                     partitionName = item.TryGetProperty("partitionName", out var p) ? p.GetString() ?? "" : "",
-                    processingTimeSeconds = item.TryGetProperty("processingTimeSeconds", out var t) ? Math.Round(t.GetDouble(), 1) : 0,
-                    rowCount = item.TryGetProperty("rowCount", out var r) && r.ValueKind != System.Text.Json.JsonValueKind.Null ? r.GetInt64() : (long?)null
-                });
+                    processingTimeSeconds = Math.Round(secs, 1),
+                    rowCount = item.TryGetProperty("rowCount", out var r) && r.ValueKind != System.Text.Json.JsonValueKind.Null ? r.GetInt64() : (long?)null,
+                    severity = item.TryGetProperty("severity", out var s) ? s.GetString() : null
+                };
+                rows.Add((secs, row));
             }
-            return list.Count > 0 ? list.ToArray() : null;
+
+            var ordered = rows.OrderByDescending(x => x.SortKey).Select(x => x.Row).ToArray();
+            return ordered.Length > 0 ? ordered : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static object[]? ParsePerformanceWarnings(string? resultJson)
+    {
+        if (string.IsNullOrWhiteSpace(resultJson)) return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(resultJson);
+            if (!doc.RootElement.TryGetProperty("performanceWarnings", out var arr))
+                return null;
+
+            var rows = new List<(double SortKey, object Row)>();
+            foreach (var item in arr.EnumerateArray())
+            {
+                var secs = item.TryGetProperty("processingTimeSeconds", out var t) ? t.GetDouble() : 0;
+                var row = new
+                {
+                    databaseName = item.TryGetProperty("databaseName", out var dn) ? dn.GetString() ?? "" : "",
+                    tableName = item.TryGetProperty("tableName", out var tn) ? tn.GetString() ?? "" : "",
+                    partitionName = item.TryGetProperty("partitionName", out var p) ? p.GetString() ?? "" : "",
+                    processingTimeSeconds = Math.Round(secs, 1),
+                    severity = item.TryGetProperty("severity", out var s) ? s.GetString() ?? "" : ""
+                };
+                rows.Add((secs, row));
+            }
+
+            var ordered = rows.OrderByDescending(x => x.SortKey).Select(x => x.Row).ToArray();
+            return ordered.Length > 0 ? ordered : null;
         }
         catch (System.Text.Json.JsonException)
         {

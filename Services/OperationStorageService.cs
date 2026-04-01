@@ -51,6 +51,10 @@ public class OperationEntity : ITableEntity
     public string? LastBatchError { get; set; }
     public string? LastBatchFailureCategory { get; set; }
     public string? LastBatchFailureSource { get; set; }
+    public string? RequestedByUserId { get; set; }
+    public string? RequestedByDisplayName { get; set; }
+    public string? RequestedByEmail { get; set; }
+    public string? RequestSource { get; set; }
     
     public OperationEntity() { }
     
@@ -85,6 +89,10 @@ public class OperationEntity : ITableEntity
         LastBatchError = operation.LastBatchError;
         LastBatchFailureCategory = operation.LastBatchFailureCategory;
         LastBatchFailureSource = operation.LastBatchFailureSource;
+        RequestedByUserId = operation.RequestedByUserId;
+        RequestedByDisplayName = operation.RequestedByDisplayName;
+        RequestedByEmail = operation.RequestedByEmail;
+        RequestSource = operation.RequestSource;
     }
     
     public OperationStatus ToOperationStatus()
@@ -117,7 +125,11 @@ public class OperationEntity : ITableEntity
             LastBatchTables = JsonSerializer.Deserialize<List<string>>(LastBatchTablesJson) ?? new List<string>(),
             LastBatchError = LastBatchError,
             LastBatchFailureCategory = LastBatchFailureCategory,
-            LastBatchFailureSource = LastBatchFailureSource
+            LastBatchFailureSource = LastBatchFailureSource,
+            RequestedByUserId = RequestedByUserId,
+            RequestedByDisplayName = RequestedByDisplayName,
+            RequestedByEmail = RequestedByEmail,
+            RequestSource = RequestSource
         };
     }
 }

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DH Refresh Portal Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+    <main class="page">
+        <header class="dashboard-header card">
+            <div>
+                <p class="eyebrow">DH Refresh Portal</p>
+                <h1>Dashboard</h1>
+                <p id="sessionStatus" class="muted">Checking session...</p>
+            </div>
+            <div class="hero-actions">
+                <button id="backToLoginButton" type="button" class="secondary">Login Page</button>
+                <button id="signOutButton" type="button" class="secondary">Sign Out</button>
+            </div>
+        </header>
+
+        <section id="messageBanner" class="banner info" hidden>
+            Loading portal state...
+        </section>
+
+        <section class="stats-grid">
+            <article class="metric-card">
+                <p class="metric-label">Signed-in User</p>
+                <p id="dashboardUserEmail" class="metric-value metric-value-small">Unknown</p>
+            </article>
+            <article class="metric-card">
+                <p class="metric-label">Available Models</p>
+                <p id="modelsCount" class="metric-value">0</p>
+            </article>
+            <article class="metric-card">
+                <p class="metric-label">Loaded Partitions</p>
+                <p id="partitionsCount" class="metric-value">0</p>
+            </article>
+            <article class="metric-card">
+                <p class="metric-label">Recent Operations</p>
+                <p id="recentOperationsCount" class="metric-value">0</p>
+            </article>
+        </section>
+
+        <section class="grid">
+            <section class="card">
+                <h2>Refresh Request</h2>
+                <label for="modelSelect">Model</label>
+                <select id="modelSelect" disabled>
+                    <option value="">Select a model</option>
+                </select>
+
+                <label for="tableSelect">Table</label>
+                <select id="tableSelect" disabled>
+                    <option value="">Select a table</option>
+                </select>
+
+                <label class="checkbox">
+                    <input id="wholeTableCheckbox" type="checkbox" checked />
+                    Refresh the whole table
+                </label>
+
+                <label for="partitionSelect">Partition</label>
+                <select id="partitionSelect" disabled>
+                    <option value="">Select a partition</option>
+                </select>
+
+                <label for="refreshTypeSelect">Refresh Type</label>
+                <select id="refreshTypeSelect" disabled>
+                    <option value="Full">Full</option>
+                    <option value="DataOnly">DataOnly</option>
+                </select>
+
+                <div class="button-row">
+                    <button id="loadMetadataButton" type="button" disabled>Reload Metadata</button>
+                    <button id="submitRefreshButton" type="button" disabled>Submit Refresh</button>
+                </div>
+
+                <p id="selectionHint" class="muted">Your allowed models will load automatically after sign-in.</p>
+            </section>
+
+            <section class="card">
+                <h2>Session Details</h2>
+                <pre id="userProfile" class="code-block">No user profile loaded.</pre>
+            </section>
+        </section>
+
+        <section class="grid">
+            <section class="card">
+                <h2>Latest Submission</h2>
+                <p id="submitStatus">No refresh submitted yet.</p>
+                <pre id="submitPayload" class="code-block">{}</pre>
+                <div class="button-row">
+                    <button id="pollLatestButton" type="button" class="secondary" disabled>Poll Latest Operation</button>
+                    <button id="loadHistoryButton" type="button" class="secondary" disabled>Load My History</button>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Operation Status</h2>
+                <pre id="operationStatus" class="code-block">No operation selected.</pre>
+            </section>
+        </section>
+
+        <section class="card">
+            <h2>My Recent Operations</h2>
+            <div id="historyContainer" class="history-list">
+                <p class="muted">No history loaded.</p>
+            </div>
+        </section>
+    </main>
+
+    <script src="./msal-browser.min.js"></script>
+    <script src="./config.js"></script>
+    <script src="./app.js"></script>
+</body>
+</html>

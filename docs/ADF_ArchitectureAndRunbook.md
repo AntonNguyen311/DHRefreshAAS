@@ -5,6 +5,7 @@ This is the canonical ADF-focused document for the live environment behind `DHRe
 It captures:
 
 - the live orchestration chain
+- the canonical ADF authoring source in repo
 - the purpose of each important ADF/Logic App component
 - the protections added to stop duplicate orchestrator runs
 - the recovery model around `MasterEtlLineageKey`
@@ -26,6 +27,11 @@ Last reviewed: `2026-03-31`
 | SQL Server | `vn-sql-sa-sdp-solution-p-01` |
 | SQL database | `datalakeprod` |
 
+Repo authoring source of truth:
+
+- `AzureDataFactory/adf/`
+- do not publish from the legacy snapshot folders under `AzureDataFactory/pipeline/`, `AzureDataFactory/linkedService/`, or `AzureDataFactory/dataset/`
+
 ## 2. End-To-End Flow
 
 ```mermaid
@@ -36,7 +42,7 @@ flowchart TD
     el --> load[ADF Load Cloud ETL Job]
     load --> queue[ADF Extract and load pipeline in queue]
     queue --> master[ADF 000 - master pipeline daily job]
-    master --> refresh[ADF Refresh Cube_SDP]
+    master --> refresh[ADF Refresh Cube]
     refresh --> refreshLogic[Logic App RefreshCube]
     refreshLogic --> aas[Function DHRefreshAAS_HttpStart / DHRefreshAAS_Status]
 ```
@@ -46,10 +52,10 @@ Interpretation:
 - `SDPAutomation` is the outer entry point for ETL orchestration.
 - `DHRefreshAAS_StartElJobIfIdle` is now the hard gate that decides whether ADF may start another `EL Job - Start`.
 - `EL Job - Start` drains the ETL queue in a loop.
-- `Load Cloud ETL Job` picks one pending SQL job when no SQL job is already marked `RUNNING`.
+- `Load Cloud ETL Job` atomically claims at most one SQL job through `ETL.p_ClaimNextSsisJobForAdf`.
 - `Extract and load pipeline in queue` prepares SQL control state, runs the master pipeline, restores control tables, and links the master run back to `SSISJobInfo`.
-- `000 - master pipeline daily job` is the extract/load master. Its live refresh branch is `Refresh Cube_SDP`.
-- `Refresh Cube_SDP` triggers the `RefreshCube` Logic App, which in turn calls the Azure Function refresh API.
+- `000 - master pipeline daily job` is the extract/load master. Its live refresh branch is `Refresh Cube`.
+- `Refresh Cube` resolves the live Logic App callback URL through ARM using the ADF managed identity, then triggers `RefreshCube`, which in turn calls the Azure Function refresh API.
 
 ## 3. Component Inventory
 
@@ -120,7 +126,7 @@ Important implementation details:
 Purpose:
 
 - reads one pending job from `SSISJobInfo`
-- only picks work if no job is already marked `RUNNING`
+- atomically claims the next runnable job through `ETL.p_ClaimNextSsisJobForAdf`
 - either executes `Extract and load pipeline in queue` or waits briefly
 
 Current safe expression:
@@ -132,19 +138,19 @@ Current safe expression:
 Why this matters:
 
 - on `2026-03-27`, repeated failures happened because `firstRow` did not exist when lookup returned no row
+- claim ownership now lives in SQL transaction scope instead of a client-side `NOT EXISTS (RUNNING)` check
 
 ### `Extract and load pipeline in queue`
 
 Purpose:
 
-- updates SQL job status to `RUNNING`
 - calls the master pipeline
 - restores ETL control table state on both success and failure
 - writes the resolved `MasterPipelineRunId`, `LineageKey`, and `LastLinkedDateUtc` back to `SSISJobInfo`
 
 Operational meaning:
 
-- this pipeline is the bridge between SQL queue rows and master lineage state
+- this pipeline is the bridge between an already-claimed SQL queue row and master lineage state
 - it is also where correlation for later recovery decisions is persisted
 
 Important hardening added on `2026-03-31`:
@@ -164,24 +170,24 @@ Purpose:
 
 Current live refresh branch:
 
-- active branch: `Refresh Cube_copy1` -> child pipeline `Refresh Cube_SDP`
-- legacy inactive branch: `Refresh Cube New`
+- active branch: direct child pipeline `Refresh Cube`
 
 Current documentation baked into the pipeline:
 
-- pipeline description says the live path is `Refresh Cube_SDP`
-- `Refresh Cube New` description says it is legacy and intentionally inactive
+- no legacy refresh branch remains in the live master pipeline definition
 
-### `Refresh Cube_SDP`
+### `Refresh Cube`
 
 Purpose:
 
-- makes one web call to the `RefreshCube` Logic App with `MasterEtlLineageKey`
+- fetches the live callback URL for Logic App `RefreshCube` from ARM using the ADF managed identity
+- posts `MasterEtlLineageKey` to the callback URL returned at runtime
 
 Operational meaning:
 
 - ADF does not refresh AAS directly here
 - it delegates to the existing refresh Logic App and Function flow
+- signed callback secrets are no longer stored directly in tracked ADF JSON
 
 ## 4. Current Protection Model
 
@@ -282,11 +288,11 @@ The latest fully successful anchor confirmed during this investigation was:
 - master pipeline run: `3cb4bfcd-3e9a-4736-a9d3-a5ea1805355b`
 - lineage key: `29506`
 - child refresh pipeline run: `9827682c-6a85-495e-9d1f-bcd8a0e2a029`
-- `Refresh Cube_SDP` web activity returned HTTP `202` from Logic App `RefreshCube`
+- the historical refresh handoff returned HTTP `202` from Logic App `RefreshCube`
 
 This proves the intended happy path is currently valid:
 
-`master succeeded` -> `Refresh Cube_SDP succeeded` -> `RefreshCube Logic App accepted`
+`master succeeded` -> `Refresh Cube succeeded` -> `RefreshCube Logic App accepted`
 
 ## 8. Historical Failure Timeline
 
@@ -392,7 +398,7 @@ ADF is currently healthy enough when all of the following are true:
   - `Execute Load Cloud ETL Job`
   - `Wait3mins`
   - `LookupPendingJobsRecheck`
-- successful master runs continue to produce successful `Refresh Cube_SDP` runs
+- successful master runs continue to produce successful `Refresh Cube` runs
 
 ### Practical check order
 
@@ -400,7 +406,7 @@ ADF is currently healthy enough when all of the following are true:
 2. Check whether there is more than one active `EL Job - Start`.
 3. If one active `EL Job - Start` exists, inspect its activity runs.
 4. Check recent `000 - master pipeline daily job` runs.
-5. If master succeeded, confirm `Refresh Cube_SDP` succeeded.
+5. If master succeeded, confirm `Refresh Cube` succeeded.
 6. Separately inspect `SSISJobInfo` to understand whether SQL still has backlog.
 
 ### Interpreting the current active orchestrator
@@ -433,7 +439,7 @@ These are the risks that still remain even after the duplicate-run fix.
 
 ### Secrets must stay out of tracked docs
 
-- Logic App signed trigger URLs and Function keys exist in live definitions
+- Logic App signed trigger URLs and Function keys still exist at runtime, but the ADF repo no longer stores the live `RefreshCube` signed URL directly
 - document behavior, but never store the live secrets in repo docs
 
 ## 11. Recommended Operator Response

@@ -47,8 +47,29 @@ public class ResponseService
         int? queuePosition = null,
         string? queueScope = null)
     {
+        return await CreateAcceptedResponseAsync(
+            request,
+            operationId,
+            estimatedDurationMinutes,
+            operationStatus,
+            message,
+            queuePosition,
+            queueScope,
+            "/api/DHRefreshAAS_Status");
+    }
+
+    public virtual async Task<HttpResponseData> CreateAcceptedResponseAsync(
+        HttpRequestData request,
+        string operationId,
+        int estimatedDurationMinutes,
+        string operationStatus,
+        string? message,
+        int? queuePosition,
+        string? queueScope,
+        string statusPath)
+    {
         var baseUrl = $"{request.Url.Scheme}://{request.Url.Host}{(request.Url.IsDefaultPort ? "" : $":{request.Url.Port}")}";
-        var statusUrl = $"{baseUrl}/api/DHRefreshAAS_Status?operationId={operationId}";
+        var statusUrl = $"{baseUrl}{statusPath}?operationId={operationId}";
 
         var responseData = new
         {
@@ -63,6 +84,21 @@ public class ResponseService
         };
 
         return await CreateSuccessResponseAsync(request, responseData, HttpStatusCode.Accepted);
+    }
+
+    public virtual async Task<HttpResponseData> CreateBadRequestResponseAsync(HttpRequestData request, string message)
+    {
+        return await CreateSuccessResponseAsync(request, new { error = message }, HttpStatusCode.BadRequest);
+    }
+
+    public virtual async Task<HttpResponseData> CreateUnauthorizedResponseAsync(HttpRequestData request, string message)
+    {
+        return await CreateSuccessResponseAsync(request, new { error = message }, HttpStatusCode.Unauthorized);
+    }
+
+    public virtual async Task<HttpResponseData> CreateForbiddenResponseAsync(HttpRequestData request, string message)
+    {
+        return await CreateSuccessResponseAsync(request, new { error = message }, HttpStatusCode.Forbidden);
     }
 
     /// <summary>

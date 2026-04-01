@@ -31,6 +31,9 @@ public class ActivityResponse
     [JsonPropertyName("topSlowTables")]
     public List<RefreshResult>? TopSlowTables { get; set; }
 
+    [JsonPropertyName("performanceWarnings")]
+    public List<PerformanceWarningItem>? PerformanceWarnings { get; set; }
+
     [JsonPropertyName("executionSettings")]
     public RefreshExecutionSettings? ExecutionSettings { get; set; }
 

@@ -36,4 +36,11 @@ public class RefreshResult
 
     [JsonPropertyName("processingTimeSeconds")]
     public double? ProcessingTimeSeconds { get; set; }
+
+    [JsonPropertyName("databaseName")]
+    public string? DatabaseName { get; set; }
+
+    /// <summary>warning | critical when crossing configured thresholds.</summary>
+    [JsonPropertyName("severity")]
+    public string? Severity { get; set; }
 }

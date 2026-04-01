@@ -28,8 +28,15 @@ public class ConnectionService
     /// </summary>
     private string BuildConnectionString(int connectTimeoutSeconds, int commandTimeoutSeconds)
     {
+        return BuildConnectionString(connectTimeoutSeconds, commandTimeoutSeconds, null);
+    }
+
+    private string BuildConnectionString(int connectTimeoutSeconds, int commandTimeoutSeconds, string? initialCatalogOverride)
+    {
         var dataSource = _config.AasServerUrl;
-        var initialCatalog = _config.AasDatabase;
+        var initialCatalog = string.IsNullOrWhiteSpace(initialCatalogOverride)
+            ? _config.AasDatabase
+            : initialCatalogOverride.Trim();
         var authMode = _config.AasAuthMode; // "ManagedIdentity", "ServicePrincipal", or "UserPassword"
         var userId = _config.AasUserId;
         var password = _config.AasPassword;
@@ -136,9 +143,9 @@ public class ConnectionService
     /// <summary>
     /// Get connection string for ADOMD queries (e.g. row count after refresh)
     /// </summary>
-    public string GetAdomdConnectionString(int connectTimeoutSeconds = 60, int commandTimeoutSeconds = 120)
+    public string GetAdomdConnectionString(string? databaseName = null, int connectTimeoutSeconds = 60, int commandTimeoutSeconds = 120)
     {
-        return BuildConnectionString(connectTimeoutSeconds, commandTimeoutSeconds);
+        return BuildConnectionString(connectTimeoutSeconds, commandTimeoutSeconds, databaseName);
     }
 
     /// <summary>
@@ -321,8 +328,17 @@ public class ConnectionService
         int connectTimeoutSeconds,
         int commandTimeoutSeconds)
     {
+        return await CreateServerConnectionAsync(cancellationToken, connectTimeoutSeconds, commandTimeoutSeconds, null);
+    }
+
+    public virtual async Task<Server> CreateServerConnectionAsync(
+        CancellationToken cancellationToken,
+        int connectTimeoutSeconds,
+        int commandTimeoutSeconds,
+        string? initialCatalogOverride)
+    {
         var server = new Server();
-        var connectionString = BuildConnectionString(connectTimeoutSeconds, commandTimeoutSeconds);
+        var connectionString = BuildConnectionString(connectTimeoutSeconds, commandTimeoutSeconds, initialCatalogOverride);
         _logger.LogInformation("Connecting to AAS using auth mode '{AuthMode}' with Data Source '{DataSource}'.",
             _config.AasAuthMode, _config.AasServerUrl);
 

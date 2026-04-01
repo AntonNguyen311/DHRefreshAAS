@@ -16,9 +16,11 @@
     <PackageReference Include="Azure.Data.Tables" Version="12.11.0" />
     <PackageReference Include="Azure.Identity" Version="1.19.0" />
     <PackageReference Include="Microsoft.AnalysisServices" Version="19.113.2" />
+    <PackageReference Include="Microsoft.AnalysisServices.AdomdClient" Version="19.113.2" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker" Version="2.51.0" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Sdk" Version="2.0.7" />
     <PackageReference Include="Microsoft.Azure.Functions.Worker.Extensions.Http" Version="3.3.0" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.0.0" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
     <PackageReference Include="Polly" Version="8.6.6" />
     <PackageReference Include="System.Text.Json" Version="10.0.1" />

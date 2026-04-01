@@ -81,6 +81,18 @@ public class OperationStatus
 
     [JsonPropertyName("lastBatchFailureSource")]
     public string? LastBatchFailureSource { get; set; }
+
+    [JsonPropertyName("requestedByUserId")]
+    public string? RequestedByUserId { get; set; }
+
+    [JsonPropertyName("requestedByDisplayName")]
+    public string? RequestedByDisplayName { get; set; }
+
+    [JsonPropertyName("requestedByEmail")]
+    public string? RequestedByEmail { get; set; }
+
+    [JsonPropertyName("requestSource")]
+    public string? RequestSource { get; set; }
     
     /// <summary>
     /// Seeds in-progress table names for <c>ProgressTrackingService.InitializeProgress</c>; omitted from JSON via <see cref="JsonIgnoreAttribute"/>.

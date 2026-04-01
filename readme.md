@@ -10,8 +10,15 @@ Azure Functions app (.NET 8, isolated worker) that triggers **Azure Analysis Ser
 | `DHRefreshAAS_TestConnection` | GET, POST | Test connectivity to the configured AAS server |
 | `DHRefreshAAS_HttpStart` | POST | Start a long-running refresh (returns 202 + operation id for polling) |
 | `DHRefreshAAS_Status` | GET | Poll status (optional `operationId` query for a single operation) |
+| `DHRefreshAAS_PortalModels` | GET | List self-service models after Entra/App Service auth |
+| `DHRefreshAAS_PortalTables` | GET | List self-service tables for a selected model |
+| `DHRefreshAAS_PortalPartitions` | GET | List live AAS partitions for an allowed table |
+| `DHRefreshAAS_PortalSubmitRefresh` | POST | Submit an authenticated portal refresh request |
+| `DHRefreshAAS_PortalStatus` | GET | View authenticated portal history and operation status |
 
 Triggers use `AuthorizationLevel.Function`; callers must supply the function key or appropriate identity at the gateway.
+
+Portal endpoints use `AuthorizationLevel.Anonymous` and are intended to sit behind App Service Authentication / Microsoft Entra ID. The app reads `X-MS-CLIENT-PRINCIPAL` after token validation and applies role/group authorization in code.
 
 ## Resume Here
 
@@ -59,6 +66,25 @@ For `MaxRowsPerRun`, use the current preflight pattern from `docs/LogicApp_Refre
 
 For the SQL policy-driven pilot, `docs/migration_add_CubeRefreshPolicy.sql` adds table-level policy metadata (`PolicyGroup`, `RefreshWave`, `RefreshPriority`, `TableOwnerRecipients`) plus `etl.cuberefreshnotificationpolicy` for warning/failure recipient routing. `RefreshCube_UAT` is the first workflow using this contract so recipient changes can be made in SQL without editing Logic App email expressions.
 
+For the self-service portal, add these application settings:
+
+- `SELF_SERVICE_SQL_CONNECTION_STRING`: SQL connection string used to read `etl.datawarehouseandcubemapping`
+- `SELF_SERVICE_SQL_DATABASE_NAME`: display/documentation hint for the metadata database, default `datalakeprod`
+- `PORTAL_METADATA_ROLES`
+- `PORTAL_REFRESH_ROLES`
+- `PORTAL_ADMIN_ROLES`
+- `PORTAL_METADATA_GROUP_IDS`
+- `PORTAL_REFRESH_GROUP_IDS`
+- `PORTAL_ADMIN_GROUP_IDS`
+
+The portal metadata flow is:
+
+1. SQL mapping decides which models/tables are allowed.
+2. AAS/TOM returns the live current table/partition list.
+3. The backend intersects both so the portal only shows refreshable existing objects.
+
+Portal submissions are audited into operation storage with requester user id, display name, email, and request source.
+
 ## Operational Policy Locations
 
 - Table mapping and guardrails live in `etl.datawarehouseandcubemapping`
@@ -75,6 +101,7 @@ Current state:
 
 - `RefreshCube` and `RefreshCube_UAT` resolve warning/failure recipients from SQL policy first
 - `RefreshCube_New` still uses the older contract and has not yet been migrated to SQL policy-driven recipient routing
+- `portal/` contains a lightweight static Entra/MSAL frontend for self-service refresh
 
 ## Dependency injection
 
