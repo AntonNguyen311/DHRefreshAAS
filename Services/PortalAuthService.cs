@@ -13,10 +13,10 @@ public class PortalAuthService
         PropertyNameCaseInsensitive = true
     };
 
-    private readonly ConfigurationService _config;
+    private readonly IConfigurationService _config;
     private readonly ILogger<PortalAuthService> _logger;
 
-    public PortalAuthService(ConfigurationService config, ILogger<PortalAuthService> logger)
+    public PortalAuthService(IConfigurationService config, ILogger<PortalAuthService> logger)
     {
         _config = config;
         _logger = logger;

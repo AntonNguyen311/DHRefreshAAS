@@ -3,18 +3,19 @@ using Microsoft.Identity.Client;
 using Microsoft.Extensions.Logging;
 using System.Text;
 using DHRefreshAAS.Models;
+using DHRefreshAAS.Services;
 
 namespace DHRefreshAAS;
 
 /// <summary>
 /// Service for managing AAS connections with configurable, non-interactive authentication
 /// </summary>
-public class ConnectionService
+public class ConnectionService : IConnectionService
 {
     private readonly ILogger<ConnectionService> _logger;
-    private readonly ConfigurationService _config;
+    private readonly IConfigurationService _config;
 
-    public ConnectionService(ConfigurationService config, ILogger<ConnectionService> logger)
+    public ConnectionService(IConfigurationService config, ILogger<ConnectionService> logger)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(logger);
@@ -68,7 +69,7 @@ public class ConnectionService
             builder.Append("Persist Security Info=True;");
             builder.Append("Impersonation Level=Impersonate;");
         }
-        else         if (string.Equals(authMode, "ServicePrincipal", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(authMode, "ServicePrincipal", StringComparison.OrdinalIgnoreCase))
         {
             // Service Principal - Good for automation scenarios
             if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(password) || string.IsNullOrWhiteSpace(tenantId))

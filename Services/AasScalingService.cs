@@ -2,17 +2,18 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Azure.Identity;
+using DHRefreshAAS.Services;
 using Microsoft.Extensions.Logging;
 
 namespace DHRefreshAAS;
 
 public class AasScalingService
 {
-    private readonly ConfigurationService _config;
+    private readonly IConfigurationService _config;
     private readonly ILogger<AasScalingService> _logger;
     private static readonly HttpClient _httpClient = new();
 
-    public AasScalingService(ConfigurationService config, ILogger<AasScalingService> logger)
+    public AasScalingService(IConfigurationService config, ILogger<AasScalingService> logger)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(logger);
@@ -143,7 +144,9 @@ public class AasScalingService
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         using var doc = JsonDocument.Parse(body);
-        return doc.RootElement.GetProperty("sku").GetProperty("name").GetString();
+        if (!doc.RootElement.TryGetProperty("sku", out var sku) || !sku.TryGetProperty("name", out var name))
+            return null;
+        return name.GetString();
     }
 
     private async Task<bool> WaitForScalingCompleteAsync(string targetSku, CancellationToken cancellationToken)

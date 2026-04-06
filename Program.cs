@@ -11,14 +11,16 @@ var host = new HostBuilder()
     {
         services.AddHttpClient();
         // Register configuration services
-        services.AddSingleton<ConfigurationService>();
-        services.AddSingleton<ConnectionService>();
-        // Stateless orchestration service; Singleton matches DHRefreshAASController and avoids captive Scoped dependency.
-        services.AddSingleton<AasRefreshService>();
+        services.AddSingleton<IConfigurationService, ConfigurationService>();
+        services.AddSingleton<IConnectionService, ConnectionService>();
+        // Stateless orchestration service; Singleton matches controller lifetime and avoids captive Scoped dependency.
+        services.AddSingleton<IAasRefreshService, AasRefreshService>();
         services.AddSingleton<AasScalingService>();
         services.AddSingleton<ElasticPoolScalingService>();
         services.AddSingleton<RefreshConcurrencyService>();
-        services.AddSingleton<OperationStorageService>();
+        services.AddSingleton<RowCountQueryService>();
+        services.AddSingleton<SlowTableMetricsService>();
+        services.AddSingleton<IOperationStorageService, OperationStorageService>();
         services.AddSingleton<OperationCleanupService>();
         services.AddHostedService(sp => sp.GetRequiredService<OperationCleanupService>());
         services.AddSingleton<ProgressTrackingService>();
@@ -28,10 +30,14 @@ var host = new HostBuilder()
         services.AddSingleton<PortalAuthService>();
         services.AddSingleton<SelfServiceMetadataService>();
         services.AddSingleton<AdfOrchestratorGateService>();
+        services.AddSingleton<QueueExecutionService>();
+        services.AddSingleton<StatusResponseBuilder>();
         services.AddSingleton<AdfOrchestratorController>();
-        services.AddSingleton<DHRefreshAASController>();
+        services.AddSingleton<DiagnosticsController>();
+        services.AddSingleton<RefreshController>();
+        services.AddSingleton<PortalController>();
     })
     .Build();
 
-await host.Services.GetRequiredService<OperationStorageService>().InitializeAsync();
+await host.Services.GetRequiredService<IOperationStorageService>().InitializeAsync();
 host.Run();

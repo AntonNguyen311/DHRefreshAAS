@@ -1,5 +1,3 @@
-using System.Reflection;
-using DHRefreshAAS.Models;
 using Xunit;
 
 namespace DHRefreshAAS.Tests;
@@ -14,45 +12,34 @@ public class AasRefreshServiceMetricsTests
     [InlineData(300d, 120, 300, "critical")]
     public void ClassifySlowTableSeverity_ReturnsExpectedBand(double? seconds, int warnSec, int critSec, string expected)
     {
-        var method = typeof(AasRefreshService).GetMethod("ClassifySlowTableSeverity", BindingFlags.NonPublic | BindingFlags.Static);
-
-        Assert.NotNull(method);
-
-        var result = method!.Invoke(null, new object?[] { seconds, warnSec, critSec });
-
-        Assert.Equal(expected, Assert.IsType<string>(result));
+        var result = SlowTableMetricsService.ClassifySlowTableSeverity(seconds, warnSec, critSec);
+        Assert.Equal(expected, result);
     }
 
     [Fact]
     public void ResolveRowCount_PrefersPartitionSpecificCount()
     {
-        var method = typeof(AasRefreshService).GetMethod("ResolveRowCount", BindingFlags.NonPublic | BindingFlags.Static);
         var rowCounts = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase)
         {
             ["Sales"] = 100,
             ["Sales|P202603"] = 25
         };
 
-        Assert.NotNull(method);
+        var result = RowCountQueryService.ResolveRowCount(rowCounts, "Sales", "P202603");
 
-        var result = method!.Invoke(null, new object?[] { rowCounts, "Sales", "P202603" });
-
-        Assert.Equal(25L, Assert.IsType<long>(result));
+        Assert.Equal(25L, result);
     }
 
     [Fact]
     public void ResolveRowCount_FallsBackToTableCount_WhenPartitionSpecificMissing()
     {
-        var method = typeof(AasRefreshService).GetMethod("ResolveRowCount", BindingFlags.NonPublic | BindingFlags.Static);
         var rowCounts = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase)
         {
             ["Sales"] = 100
         };
 
-        Assert.NotNull(method);
+        var result = RowCountQueryService.ResolveRowCount(rowCounts, "Sales", "P202603");
 
-        var result = method!.Invoke(null, new object?[] { rowCounts, "Sales", "P202603" });
-
-        Assert.Equal(100L, Assert.IsType<long>(result));
+        Assert.Equal(100L, result);
     }
 }

@@ -10,14 +10,14 @@ namespace DHRefreshAAS.Services;
 /// </summary>
 public class OperationCleanupService : IHostedService
 {
-    private readonly OperationStorageService _operationStorage;
-    private readonly ConfigurationService _config;
+    private readonly IOperationStorageService _operationStorage;
+    private readonly IConfigurationService _config;
     private readonly ILogger<OperationCleanupService> _logger;
     private readonly ConcurrentDictionary<string, byte> _inFlightOperations = new();
 
     public OperationCleanupService(
-        OperationStorageService operationStorage,
-        ConfigurationService config,
+        IOperationStorageService operationStorage,
+        IConfigurationService config,
         ILogger<OperationCleanupService> logger)
     {
         _operationStorage = operationStorage;

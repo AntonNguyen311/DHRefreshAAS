@@ -369,3 +369,18 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Azure CLI local state and caches
+.azure-local/
+
+# Playwright CLI test artifacts
+.playwright-cli/
+
+# Temporary SQL investigation files
+temp_*.sql
+
+# Deploy artifacts
+deploy.zip
+
+# Publish staging
+.publish/

@@ -151,7 +151,7 @@ internal class QueueLeaseEntity : ITableEntity
 /// <summary>
 /// Service for persistent operation storage using Azure Table Storage
 /// </summary>
-public class OperationStorageService
+public class OperationStorageService : IOperationStorageService
 {
     private readonly TableClient _tableClient;
     private readonly ILogger<OperationStorageService> _logger;
@@ -600,13 +600,13 @@ public class OperationStorageService
                     case OperationStatusEnum.Queued:
                         queued++;
                         break;
-                    case "running":
+                    case OperationStatusEnum.Running:
                         running++;
                         break;
-                    case "completed":
+                    case OperationStatusEnum.Completed:
                         completed++;
                         break;
-                    case "failed":
+                    case OperationStatusEnum.Failed:
                         failed++;
                         break;
                 }

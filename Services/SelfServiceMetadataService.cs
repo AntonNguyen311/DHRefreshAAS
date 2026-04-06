@@ -8,13 +8,13 @@ namespace DHRefreshAAS.Services;
 
 public class SelfServiceMetadataService
 {
-    private readonly ConfigurationService _config;
-    private readonly ConnectionService _connectionService;
+    private readonly IConfigurationService _config;
+    private readonly IConnectionService _connectionService;
     private readonly ILogger<SelfServiceMetadataService> _logger;
 
     public SelfServiceMetadataService(
-        ConfigurationService config,
-        ConnectionService connectionService,
+        IConfigurationService config,
+        IConnectionService connectionService,
         ILogger<SelfServiceMetadataService> logger)
     {
         _config = config;

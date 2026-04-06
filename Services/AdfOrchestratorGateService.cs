@@ -31,15 +31,15 @@ public class AdfOrchestratorGateService
     private const string QueryApiVersion = "2018-06-01";
     private const string CreateRunApiVersion = "2018-06-01";
 
-    private readonly ConfigurationService _config;
-    private readonly OperationStorageService _operationStorage;
+    private readonly IConfigurationService _config;
+    private readonly IOperationStorageService _operationStorage;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly TokenCredential _credential;
     private readonly ILogger<AdfOrchestratorGateService> _logger;
 
     public AdfOrchestratorGateService(
-        ConfigurationService config,
-        OperationStorageService operationStorage,
+        IConfigurationService config,
+        IOperationStorageService operationStorage,
         IHttpClientFactory httpClientFactory,
         ILogger<AdfOrchestratorGateService> logger)
     {

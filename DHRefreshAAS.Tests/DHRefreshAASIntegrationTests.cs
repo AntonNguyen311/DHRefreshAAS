@@ -1,12 +1,10 @@
 using Xunit;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Moq;
 using System.Net;
-using DHRefreshAAS;
 using DHRefreshAAS.Controllers;
 using DHRefreshAAS.Services;
 using DHRefreshAAS.Models;
@@ -14,88 +12,69 @@ using DHRefreshAAS.Enums;
 
 namespace DHRefreshAAS.Tests;
 
+/// <summary>
+/// Integration-level tests verifying cross-service flows through the new controllers.
+/// </summary>
 public class DHRefreshAASIntegrationTests
 {
-    private readonly Mock<ConfigurationService> _mockConfig;
-    private readonly Mock<ConnectionService> _mockConnectionService;
-    private readonly Mock<AasRefreshService> _mockAasRefreshService;
-    private readonly Mock<AasScalingService> _mockScalingService;
-    private readonly Mock<ElasticPoolScalingService> _mockElasticPoolScalingService;
-    private readonly Mock<OperationStorageService> _mockOperationStorage;
-    private readonly Mock<ProgressTrackingService> _mockProgressTracking;
-    private readonly Mock<ErrorHandlingService> _mockErrorHandling;
+    private readonly Mock<IConfigurationService> _mockConfig;
+    private readonly Mock<IConnectionService> _mockConnectionService;
+    private readonly Mock<IOperationStorageService> _mockOperationStorage;
     private readonly Mock<RequestProcessingService> _mockRequestProcessing;
     private readonly Mock<ResponseService> _mockResponseService;
-    private readonly Mock<PortalAuthService> _mockPortalAuthService;
-    private readonly Mock<SelfServiceMetadataService> _mockSelfServiceMetadataService;
-    private readonly Mock<OperationCleanupService> _mockCleanupService;
-    private readonly Mock<IHostApplicationLifetime> _mockHostLifetime;
-    private readonly Mock<ILogger<DHRefreshAASController>> _mockLogger;
-    private readonly DHRefreshAASController _controller;
+    private readonly Mock<ErrorHandlingService> _mockErrorHandling;
+    private readonly Mock<QueueExecutionService> _mockQueueExecution;
+    private readonly Mock<StatusResponseBuilder> _mockStatusResponseBuilder;
+    private readonly RefreshController _refreshController;
+    private readonly DiagnosticsController _diagnosticsController;
 
     public DHRefreshAASIntegrationTests()
     {
-        _mockConfig = new Mock<ConfigurationService>(Mock.Of<IConfiguration>(), Mock.Of<ILogger<ConfigurationService>>());
-        _mockConnectionService = new Mock<ConnectionService>(_mockConfig.Object, Mock.Of<ILogger<ConnectionService>>());
-        _mockOperationStorage = new Mock<OperationStorageService>(Mock.Of<ILogger<OperationStorageService>>());
-        _mockAasRefreshService = new Mock<AasRefreshService>(_mockConfig.Object, _mockConnectionService.Object, new Mock<AasScalingService>(_mockConfig.Object, Mock.Of<ILogger<AasScalingService>>()).Object, new Mock<ElasticPoolScalingService>(_mockConfig.Object, Mock.Of<ILogger<ElasticPoolScalingService>>()).Object, new RefreshConcurrencyService(Mock.Of<ILogger<RefreshConcurrencyService>>()), _mockOperationStorage.Object, Mock.Of<ILogger<AasRefreshService>>());
-        _mockScalingService = new Mock<AasScalingService>(_mockConfig.Object, Mock.Of<ILogger<AasScalingService>>());
-        _mockElasticPoolScalingService = new Mock<ElasticPoolScalingService>(_mockConfig.Object, Mock.Of<ILogger<ElasticPoolScalingService>>());
-        _mockProgressTracking = new Mock<ProgressTrackingService>(Mock.Of<ILogger<ProgressTrackingService>>());
-        _mockErrorHandling = new Mock<ErrorHandlingService>(Mock.Of<ILogger<ErrorHandlingService>>());
+        _mockConfig = new Mock<IConfigurationService>();
+        _mockConnectionService = new Mock<IConnectionService>();
+        _mockOperationStorage = new Mock<IOperationStorageService>();
+        var mockScalingService = new Mock<AasScalingService>(_mockConfig.Object, Mock.Of<ILogger<AasScalingService>>());
+        var mockElasticPoolScalingService = new Mock<ElasticPoolScalingService>(_mockConfig.Object, Mock.Of<ILogger<ElasticPoolScalingService>>());
         _mockRequestProcessing = new Mock<RequestProcessingService>(Mock.Of<ILogger<RequestProcessingService>>());
         _mockResponseService = new Mock<ResponseService>();
-        _mockPortalAuthService = new Mock<PortalAuthService>(_mockConfig.Object, Mock.Of<ILogger<PortalAuthService>>());
-        _mockSelfServiceMetadataService = new Mock<SelfServiceMetadataService>(_mockConfig.Object, _mockConnectionService.Object, Mock.Of<ILogger<SelfServiceMetadataService>>());
-        _mockCleanupService = new Mock<OperationCleanupService>(_mockOperationStorage.Object, _mockConfig.Object, Mock.Of<ILogger<OperationCleanupService>>());
-        _mockHostLifetime = new Mock<IHostApplicationLifetime>();
-        _mockHostLifetime.Setup(l => l.ApplicationStopping).Returns(CancellationToken.None);
-        _mockLogger = new Mock<ILogger<DHRefreshAASController>>();
-        _mockOperationStorage
-            .Setup(x => x.TryAcquireQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(false);
-        _mockOperationStorage
-            .Setup(x => x.TryPromoteNextQueuedOperationAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((string?)null);
-        _mockOperationStorage
-            .Setup(x => x.GetQueuePositionAsync(It.IsAny<string>()))
-            .ReturnsAsync((int?)null);
-        _mockOperationStorage
-            .Setup(x => x.ReleaseQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-        _mockOperationStorage
-            .Setup(x => x.ReleaseQueueLeaseForOperationAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-        _mockOperationStorage
-            .Setup(x => x.RenewQueueLeaseAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-        _mockOperationStorage
-            .Setup(x => x.MarkOperationAsFailedAsync(It.IsAny<string>(), It.IsAny<string>()))
-            .ReturnsAsync(true);
+        _mockErrorHandling = new Mock<ErrorHandlingService>(Mock.Of<ILogger<ErrorHandlingService>>());
 
-        _controller = new DHRefreshAASController(
+        _mockQueueExecution = new Mock<QueueExecutionService>(
+            _mockConfig.Object, Mock.Of<IAasRefreshService>(), _mockOperationStorage.Object,
+            new Mock<ProgressTrackingService>(Mock.Of<ILogger<ProgressTrackingService>>()).Object,
+            new Mock<OperationCleanupService>(_mockOperationStorage.Object, _mockConfig.Object, Mock.Of<ILogger<OperationCleanupService>>()).Object,
+            Mock.Of<IHostApplicationLifetime>(),
+            Mock.Of<ILogger<QueueExecutionService>>());
+        _mockStatusResponseBuilder = new Mock<StatusResponseBuilder>(
+            _mockOperationStorage.Object,
+            new Mock<ProgressTrackingService>(Mock.Of<ILogger<ProgressTrackingService>>()).Object,
+            _mockResponseService.Object);
+
+        _refreshController = new RefreshController(
             _mockConfig.Object,
             _mockConnectionService.Object,
-            _mockAasRefreshService.Object,
-            _mockScalingService.Object,
-            _mockElasticPoolScalingService.Object,
+            mockScalingService.Object,
+            mockElasticPoolScalingService.Object,
             _mockOperationStorage.Object,
-            _mockProgressTracking.Object,
-            _mockErrorHandling.Object,
             _mockRequestProcessing.Object,
             _mockResponseService.Object,
-            _mockPortalAuthService.Object,
-            _mockSelfServiceMetadataService.Object,
-            _mockCleanupService.Object,
-            _mockHostLifetime.Object,
-            _mockLogger.Object);
+            _mockErrorHandling.Object,
+            _mockQueueExecution.Object,
+            _mockStatusResponseBuilder.Object,
+            Mock.Of<ILogger<RefreshController>>());
+
+        _diagnosticsController = new DiagnosticsController(
+            _mockConnectionService.Object,
+            _mockResponseService.Object,
+            _mockErrorHandling.Object,
+            Mock.Of<ILogger<DiagnosticsController>>());
     }
 
     [Fact]
     public async Task EndToEnd_ValidRefreshRequest_CompleteFlow()
     {
-        var mockRequest = CreateMockHttpRequest();
-        var mockContext = CreateMockFunctionContext();
+        var mockRequest = TestHttpHelpers.CreateHttpRequestMock();
+        var mockContext = TestHttpHelpers.CreateFunctionContextMock();
 
         var requestData = new PostData
         {
@@ -120,140 +99,86 @@ public class DHRefreshAASIntegrationTests
         _mockRequestProcessing
             .Setup(x => x.ParseAndValidateRequestAsync(mockRequest.Object))
             .ReturnsAsync(requestData);
-
         _mockRequestProcessing
             .Setup(x => x.CreateEnhancedRequestData(requestData, _mockConfig.Object))
             .Returns(enhancedRequestData);
-
         _mockRequestProcessing
             .Setup(x => x.EstimateOperationDuration(requestData))
             .Returns(20);
 
-        _mockOperationStorage
-            .Setup(x => x.UpsertOperationAsync(It.IsAny<OperationStatus>()))
-            .ReturnsAsync(true);
+        _mockQueueExecution
+            .Setup(x => x.StartAsyncOperationAsync(requestData, enhancedRequestData, 20, null, "api"))
+            .ReturnsAsync(new QueueOperationResult
+            {
+                OperationId = "op-1",
+                EstimatedDurationMinutes = 20,
+                StartedImmediately = true,
+                Status = OperationStatusEnum.Running,
+                Message = "Started",
+                QueueScope = "aas:server:testdb"
+            });
 
-        var mockAcceptedResponse = CreateMockHttpResponse(HttpStatusCode.Accepted);
+        var mockAcceptedResponse = TestHttpHelpers.CreateHttpResponseData(HttpStatusCode.Accepted);
         _mockResponseService
             .Setup(x => x.CreateAcceptedResponseAsync(
-                mockRequest.Object,
-                It.IsAny<string>(),
-                20,
-                It.IsAny<string>(),
-                It.IsAny<string?>(),
-                It.IsAny<int?>(),
-                It.IsAny<string?>()))
+                mockRequest.Object, It.IsAny<string>(), 20,
+                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockAcceptedResponse);
 
-        var result = await _controller.HttpStart(mockRequest.Object, mockContext.Object);
+        var result = await _refreshController.HttpStart(mockRequest.Object, mockContext.Object);
 
         Assert.Equal(HttpStatusCode.Accepted, result.StatusCode);
         _mockRequestProcessing.Verify(x => x.ParseAndValidateRequestAsync(mockRequest.Object), Times.Once);
         _mockRequestProcessing.Verify(x => x.CreateEnhancedRequestData(requestData, _mockConfig.Object), Times.Once);
-        _mockRequestProcessing.Verify(x => x.EstimateOperationDuration(requestData), Times.Once);
-        _mockOperationStorage.Verify(x => x.UpsertOperationAsync(It.IsAny<OperationStatus>()), Times.Once);
+        _mockQueueExecution.Verify(x => x.StartAsyncOperationAsync(requestData, enhancedRequestData, 20, null, "api"), Times.Once);
     }
 
     [Fact]
-    public async Task StatusEndpoint_ExistingOperation_ReturnsDetailedStatus()
+    public async Task StatusEndpoint_ExistingOperation_DelegatesToBuilder()
     {
-        var mockRequest = CreateMockHttpRequest();
-        var mockContext = CreateMockFunctionContext();
+        var mockRequest = TestHttpHelpers.CreateHttpRequestMock();
+        var mockContext = TestHttpHelpers.CreateFunctionContextMock();
         var operationId = "existing-operation-id";
 
         mockRequest.Setup(x => x.Url).Returns(new Uri($"http://localhost/api/status?operationId={operationId}"));
 
-        var operationStatus = new OperationStatus
-        {
-            OperationId = operationId,
-            Status = OperationStatusEnum.Running,
-            StartTime = DateTime.UtcNow.AddMinutes(-10),
-            EndTime = null,
-            TablesCount = 5,
-            TablesCompleted = 3,
-            TablesFailed = 1,
-            ProgressPercentage = 80.0,
-            CompletedTables = new List<string> { "Table1", "Table2", "Table3" },
-            FailedTables = new List<string> { "Table4: Connection timeout" },
-            InProgressTables = new List<string> { "Table5" },
-            CurrentPhase = OperationPhaseEnum.ProcessingTables
-        };
-
-        _mockOperationStorage
-            .Setup(x => x.GetOperationAsync(operationId))
-            .ReturnsAsync(operationStatus);
-
-        var mockStatusResponse = CreateMockHttpResponse(HttpStatusCode.OK);
-        _mockResponseService
-            .Setup(x => x.CreateStatusResponseAsync(mockRequest.Object, It.IsAny<object>()))
+        var mockStatusResponse = TestHttpHelpers.CreateHttpResponseData(HttpStatusCode.OK);
+        _mockStatusResponseBuilder
+            .Setup(x => x.GetSpecificOperationStatusAsync(operationId, It.IsAny<HttpRequestData>(), null, false))
             .ReturnsAsync(mockStatusResponse);
 
-        var result = await _controller.GetStatus(mockRequest.Object, mockContext.Object);
+        var result = await _refreshController.GetStatus(mockRequest.Object, mockContext.Object);
 
         Assert.Equal(HttpStatusCode.OK, result.StatusCode);
-        _mockOperationStorage.Verify(x => x.GetOperationAsync(operationId), Times.Once);
-        _mockProgressTracking.Verify(x => x.UpdateProgress(operationStatus), Times.Once);
-        _mockResponseService.Verify(x => x.CreateStatusResponseAsync(mockRequest.Object, It.IsAny<object>()), Times.Once);
+        _mockStatusResponseBuilder.Verify(
+            x => x.GetSpecificOperationStatusAsync(operationId, It.IsAny<HttpRequestData>(), null, false), Times.Once);
     }
 
     [Fact]
     public async Task StatusEndpoint_NoSpecificOperation_ReturnsGeneralStatus()
     {
-        var mockRequest = CreateMockHttpRequest();
-        var mockContext = CreateMockFunctionContext();
+        var mockRequest = TestHttpHelpers.CreateHttpRequestMock();
+        var mockContext = TestHttpHelpers.CreateFunctionContextMock();
 
         mockRequest.Setup(x => x.Url).Returns(new Uri("http://localhost/api/status"));
 
-        var recentOperations = new List<OperationStatus>
-        {
-            new OperationStatus
-            {
-                OperationId = "op1",
-                Status = OperationStatusEnum.Completed,
-                StartTime = DateTime.UtcNow.AddMinutes(-30),
-                TablesCount = 3,
-                TablesCompleted = 3,
-                ProgressPercentage = 100.0
-            },
-            new OperationStatus
-            {
-                OperationId = "op2",
-                Status = OperationStatusEnum.Running,
-                StartTime = DateTime.UtcNow.AddMinutes(-5),
-                TablesCount = 2,
-                TablesCompleted = 1,
-                ProgressPercentage = 50.0
-            }
-        };
-
-        var operationCounts = (queued: 1, running: 3, completed: 10, failed: 2, total: 16);
-
-        _mockOperationStorage
-            .Setup(x => x.GetRecentOperationsAsync(10))
-            .ReturnsAsync(recentOperations);
-
-        _mockOperationStorage
-            .Setup(x => x.GetOperationCountsAsync())
-            .ReturnsAsync(operationCounts);
-
-        var mockStatusResponse = CreateMockHttpResponse(HttpStatusCode.OK);
-        _mockResponseService
-            .Setup(x => x.CreateStatusResponseAsync(mockRequest.Object, It.IsAny<object>()))
+        var mockStatusResponse = TestHttpHelpers.CreateHttpResponseData(HttpStatusCode.OK);
+        _mockStatusResponseBuilder
+            .Setup(x => x.GetGeneralStatusAsync(It.IsAny<HttpRequestData>(), null, false))
             .ReturnsAsync(mockStatusResponse);
 
-        var result = await _controller.GetStatus(mockRequest.Object, mockContext.Object);
+        var result = await _refreshController.GetStatus(mockRequest.Object, mockContext.Object);
 
         Assert.Equal(HttpStatusCode.OK, result.StatusCode);
-        _mockOperationStorage.Verify(x => x.GetRecentOperationsAsync(10), Times.Once);
-        _mockOperationStorage.Verify(x => x.GetOperationCountsAsync(), Times.Once);
-        _mockResponseService.Verify(x => x.CreateStatusResponseAsync(mockRequest.Object, It.IsAny<object>()), Times.Once);
+        _mockStatusResponseBuilder.Verify(
+            x => x.GetGeneralStatusAsync(It.IsAny<HttpRequestData>(), null, false), Times.Once);
     }
 
     [Fact]
     public async Task TokenTestEndpoint_SuccessfulTokenAcquisition_ReturnsSuccess()
     {
-        var mockRequest = CreateMockHttpRequest();
-        var mockContext = CreateMockFunctionContext();
+        var mockRequest = TestHttpHelpers.CreateHttpRequestMock();
+        var mockContext = TestHttpHelpers.CreateFunctionContextMock();
 
         var testResult = new TokenTestResult
         {
@@ -267,12 +192,12 @@ public class DHRefreshAASIntegrationTests
             .Setup(x => x.TestTokenAcquisitionAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(testResult);
 
-        var mockSuccessResponse = CreateMockHttpResponse(HttpStatusCode.OK);
+        var mockSuccessResponse = TestHttpHelpers.CreateHttpResponseData(HttpStatusCode.OK);
         _mockResponseService
             .Setup(x => x.CreateSuccessResponseAsync(mockRequest.Object, testResult, HttpStatusCode.OK))
             .ReturnsAsync(mockSuccessResponse);
 
-        var result = await _controller.TestToken(mockRequest.Object, mockContext.Object);
+        var result = await _diagnosticsController.TestToken(mockRequest.Object, mockContext.Object);
 
         Assert.Equal(HttpStatusCode.OK, result.StatusCode);
         _mockConnectionService.Verify(x => x.TestTokenAcquisitionAsync(It.IsAny<CancellationToken>()), Times.Once);
@@ -281,8 +206,8 @@ public class DHRefreshAASIntegrationTests
     [Fact]
     public async Task ConnectionTestEndpoint_SuccessfulConnection_ReturnsSuccess()
     {
-        var mockRequest = CreateMockHttpRequest();
-        var mockContext = CreateMockFunctionContext();
+        var mockRequest = TestHttpHelpers.CreateHttpRequestMock();
+        var mockContext = TestHttpHelpers.CreateFunctionContextMock();
 
         var connectionTestResult = new ConnectionTestResult
         {
@@ -297,12 +222,12 @@ public class DHRefreshAASIntegrationTests
             .Setup(x => x.TestConnectionAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(connectionTestResult);
 
-        var mockSuccessResponse = CreateMockHttpResponse(HttpStatusCode.OK);
+        var mockSuccessResponse = TestHttpHelpers.CreateHttpResponseData(HttpStatusCode.OK);
         _mockResponseService
             .Setup(x => x.CreateSuccessResponseAsync(mockRequest.Object, connectionTestResult, HttpStatusCode.OK))
             .ReturnsAsync(mockSuccessResponse);
 
-        var result = await _controller.TestConnection(mockRequest.Object, mockContext.Object);
+        var result = await _diagnosticsController.TestConnection(mockRequest.Object, mockContext.Object);
 
         Assert.Equal(HttpStatusCode.OK, result.StatusCode);
         _mockConnectionService.Verify(x => x.TestConnectionAsync(It.IsAny<CancellationToken>()), Times.Once);
@@ -311,8 +236,8 @@ public class DHRefreshAASIntegrationTests
     [Fact]
     public async Task ErrorHandling_ConfigurationFailure_ReturnsErrorResponse()
     {
-        var mockRequest = CreateMockHttpRequest();
-        var mockContext = CreateMockFunctionContext();
+        var mockRequest = TestHttpHelpers.CreateHttpRequestMock();
+        var mockContext = TestHttpHelpers.CreateFunctionContextMock();
 
         var requestData = new PostData
         {
@@ -323,34 +248,32 @@ public class DHRefreshAASIntegrationTests
         _mockRequestProcessing
             .Setup(x => x.ParseAndValidateRequestAsync(mockRequest.Object))
             .ReturnsAsync(requestData);
-
         _mockRequestProcessing
             .Setup(x => x.CreateEnhancedRequestData(requestData, _mockConfig.Object))
             .Throws(new InvalidOperationException("Configuration error"));
 
-        var mockErrorResponse = CreateMockHttpResponse(HttpStatusCode.BadRequest);
+        var mockErrorResponse = TestHttpHelpers.CreateHttpResponseData(HttpStatusCode.BadRequest);
         _mockErrorHandling
             .Setup(x => x.HandleExceptionAsync(mockRequest.Object, It.IsAny<Exception>(), "AAS refresh"))
             .ReturnsAsync(mockErrorResponse);
 
-        var result = await _controller.HttpStart(mockRequest.Object, mockContext.Object);
+        var result = await _refreshController.HttpStart(mockRequest.Object, mockContext.Object);
 
         Assert.Equal(HttpStatusCode.BadRequest, result.StatusCode);
         _mockErrorHandling.Verify(x => x.HandleExceptionAsync(mockRequest.Object, It.IsAny<Exception>(), "AAS refresh"), Times.Once);
     }
 
     [Fact]
-    public async Task ProgressTracking_UpdatesOperationStatusCorrectly()
+    public async Task ProgressTracking_HttpStartDelegatesToQueueExecution()
     {
-        var mockRequest = CreateMockHttpRequest();
-        var mockContext = CreateMockFunctionContext();
+        var mockRequest = TestHttpHelpers.CreateHttpRequestMock();
+        var mockContext = TestHttpHelpers.CreateFunctionContextMock();
 
         var requestData = new PostData
         {
             DatabaseName = "TestDB",
             RefreshObjects = new[] { new RefreshObject { Table = "Table1" } }
         };
-
         var enhancedRequestData = new EnhancedPostData
         {
             OriginalRequest = requestData,
@@ -363,42 +286,42 @@ public class DHRefreshAASIntegrationTests
         _mockRequestProcessing
             .Setup(x => x.ParseAndValidateRequestAsync(mockRequest.Object))
             .ReturnsAsync(requestData);
-
         _mockRequestProcessing
             .Setup(x => x.CreateEnhancedRequestData(requestData, _mockConfig.Object))
             .Returns(enhancedRequestData);
-
         _mockRequestProcessing
             .Setup(x => x.EstimateOperationDuration(requestData))
             .Returns(15);
 
-        _mockOperationStorage
-            .Setup(x => x.UpsertOperationAsync(It.IsAny<OperationStatus>()))
-            .ReturnsAsync(true);
+        _mockQueueExecution
+            .Setup(x => x.StartAsyncOperationAsync(requestData, enhancedRequestData, 15, null, "api"))
+            .ReturnsAsync(new QueueOperationResult
+            {
+                OperationId = "op-track",
+                EstimatedDurationMinutes = 15,
+                StartedImmediately = true,
+                Status = OperationStatusEnum.Running,
+                Message = "Started"
+            });
 
-        var mockAcceptedResponse = CreateMockHttpResponse(HttpStatusCode.Accepted);
+        var mockAcceptedResponse = TestHttpHelpers.CreateHttpResponseData(HttpStatusCode.Accepted);
         _mockResponseService
             .Setup(x => x.CreateAcceptedResponseAsync(
-                mockRequest.Object,
-                It.IsAny<string>(),
-                15,
-                It.IsAny<string>(),
-                It.IsAny<string?>(),
-                It.IsAny<int?>(),
-                It.IsAny<string?>()))
+                mockRequest.Object, It.IsAny<string>(), 15,
+                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockAcceptedResponse);
 
-        var result = await _controller.HttpStart(mockRequest.Object, mockContext.Object);
+        var result = await _refreshController.HttpStart(mockRequest.Object, mockContext.Object);
 
         Assert.Equal(HttpStatusCode.Accepted, result.StatusCode);
-        _mockOperationStorage.Verify(x => x.UpsertOperationAsync(It.IsAny<OperationStatus>()), Times.Once);
+        _mockQueueExecution.Verify(x => x.StartAsyncOperationAsync(requestData, enhancedRequestData, 15, null, "api"), Times.Once);
     }
 
     [Fact]
     public async Task RequestProcessing_ValidatesAndEnhancesRequestData()
     {
-        var mockRequest = CreateMockHttpRequest();
-        var mockContext = CreateMockFunctionContext();
+        var mockRequest = TestHttpHelpers.CreateHttpRequestMock();
+        var mockContext = TestHttpHelpers.CreateFunctionContextMock();
 
         var requestData = new PostData
         {
@@ -424,43 +347,36 @@ public class DHRefreshAASIntegrationTests
         _mockRequestProcessing
             .Setup(x => x.ParseAndValidateRequestAsync(mockRequest.Object))
             .ReturnsAsync(requestData);
-
         _mockRequestProcessing
             .Setup(x => x.CreateEnhancedRequestData(requestData, _mockConfig.Object))
             .Returns(enhancedRequestData);
-
         _mockRequestProcessing
             .Setup(x => x.EstimateOperationDuration(requestData))
             .Returns(25);
 
-        _mockOperationStorage
-            .Setup(x => x.UpsertOperationAsync(It.IsAny<OperationStatus>()))
-            .ReturnsAsync(true);
+        _mockQueueExecution
+            .Setup(x => x.StartAsyncOperationAsync(requestData, enhancedRequestData, 25, null, "api"))
+            .ReturnsAsync(new QueueOperationResult
+            {
+                OperationId = "op-validate",
+                EstimatedDurationMinutes = 25,
+                StartedImmediately = true,
+                Status = OperationStatusEnum.Running,
+                Message = "Started"
+            });
 
-        var mockAcceptedResponse = CreateMockHttpResponse(HttpStatusCode.Accepted);
+        var mockAcceptedResponse = TestHttpHelpers.CreateHttpResponseData(HttpStatusCode.Accepted);
         _mockResponseService
             .Setup(x => x.CreateAcceptedResponseAsync(
-                mockRequest.Object,
-                It.IsAny<string>(),
-                25,
-                It.IsAny<string>(),
-                It.IsAny<string?>(),
-                It.IsAny<int?>(),
-                It.IsAny<string?>()))
+                mockRequest.Object, It.IsAny<string>(), 25,
+                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<int?>(), It.IsAny<string?>()))
             .ReturnsAsync(mockAcceptedResponse);
 
-        var result = await _controller.HttpStart(mockRequest.Object, mockContext.Object);
+        var result = await _refreshController.HttpStart(mockRequest.Object, mockContext.Object);
 
         Assert.Equal(HttpStatusCode.Accepted, result.StatusCode);
         _mockRequestProcessing.Verify(x => x.ParseAndValidateRequestAsync(mockRequest.Object), Times.Once);
         _mockRequestProcessing.Verify(x => x.CreateEnhancedRequestData(requestData, _mockConfig.Object), Times.Once);
         _mockRequestProcessing.Verify(x => x.EstimateOperationDuration(requestData), Times.Once);
     }
-
-    private static Mock<HttpRequestData> CreateMockHttpRequest() => TestHttpHelpers.CreateHttpRequestMock();
-
-    private static Mock<FunctionContext> CreateMockFunctionContext() => TestHttpHelpers.CreateFunctionContextMock();
-
-    private static HttpResponseData CreateMockHttpResponse(HttpStatusCode statusCode) =>
-        TestHttpHelpers.CreateHttpResponseData(statusCode);
 }

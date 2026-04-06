@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Azure.Identity;
+using DHRefreshAAS.Services;
 using Microsoft.Extensions.Logging;
 
 namespace DHRefreshAAS;
@@ -12,11 +13,11 @@ namespace DHRefreshAAS;
 /// </summary>
 public class ElasticPoolScalingService
 {
-    private readonly ConfigurationService _config;
+    private readonly IConfigurationService _config;
     private readonly ILogger<ElasticPoolScalingService> _logger;
     private static readonly HttpClient _httpClient = new();
 
-    public ElasticPoolScalingService(ConfigurationService config, ILogger<ElasticPoolScalingService> logger)
+    public ElasticPoolScalingService(IConfigurationService config, ILogger<ElasticPoolScalingService> logger)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(logger);

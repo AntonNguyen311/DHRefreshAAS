@@ -1,12 +1,13 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
+using DHRefreshAAS.Services;
 
 namespace DHRefreshAAS;
 
 /// <summary>
 /// Configuration service for reading environment variables and settings
 /// </summary>
-public class ConfigurationService
+public class ConfigurationService : IConfigurationService
 {
     private readonly IConfiguration _configuration;
     private readonly ILogger<ConfigurationService> _logger;

@@ -1,34 +1,36 @@
-using Microsoft.AnalysisServices.AdomdClient;
 using Microsoft.AnalysisServices.Tabular;
 using Microsoft.Extensions.Logging;
 using DHRefreshAAS.Models;
 using DHRefreshAAS.Services;
 using Polly;
 using Polly.Retry;
-using System.Data;
 
 namespace DHRefreshAAS;
 
 /// <summary>
 /// Main service for AAS refresh operations in the isolated worker model
 /// </summary>
-public class AasRefreshService
+public class AasRefreshService : IAasRefreshService
 {
-    private readonly ConfigurationService _config;
-    private readonly ConnectionService _connectionService;
+    private readonly IConfigurationService _config;
+    private readonly IConnectionService _connectionService;
     private readonly AasScalingService _scalingService;
     private readonly ElasticPoolScalingService _elasticPoolScalingService;
     private readonly RefreshConcurrencyService _concurrencyService;
-    private readonly OperationStorageService _operationStorage;
+    private readonly IOperationStorageService _operationStorage;
+    private readonly RowCountQueryService _rowCountQueryService;
+    private readonly SlowTableMetricsService _slowTableMetricsService;
     private readonly ILogger<AasRefreshService> _logger;
 
     public AasRefreshService(
-        ConfigurationService config,
-        ConnectionService connectionService,
+        IConfigurationService config,
+        IConnectionService connectionService,
         AasScalingService scalingService,
         ElasticPoolScalingService elasticPoolScalingService,
         RefreshConcurrencyService concurrencyService,
-        OperationStorageService operationStorage,
+        IOperationStorageService operationStorage,
+        RowCountQueryService rowCountQueryService,
+        SlowTableMetricsService slowTableMetricsService,
         ILogger<AasRefreshService> logger)
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -37,6 +39,8 @@ public class AasRefreshService
         ArgumentNullException.ThrowIfNull(elasticPoolScalingService);
         ArgumentNullException.ThrowIfNull(concurrencyService);
         ArgumentNullException.ThrowIfNull(operationStorage);
+        ArgumentNullException.ThrowIfNull(rowCountQueryService);
+        ArgumentNullException.ThrowIfNull(slowTableMetricsService);
         ArgumentNullException.ThrowIfNull(logger);
         _config = config;
         _connectionService = connectionService;
@@ -44,6 +48,8 @@ public class AasRefreshService
         _elasticPoolScalingService = elasticPoolScalingService;
         _concurrencyService = concurrencyService;
         _operationStorage = operationStorage;
+        _rowCountQueryService = rowCountQueryService;
+        _slowTableMetricsService = slowTableMetricsService;
         _logger = logger;
     }
 
@@ -104,7 +110,7 @@ public class AasRefreshService
             _logger.LogError(message);
             response.Message = response.LastBatchDiagnostic == null
                 ? message
-                : $"{message}. Last observed batch: {BuildBatchFailureMessage(response.LastBatchDiagnostic)}";
+                : $"{message}. Last observed batch: {SaveChangesFailureAnalyzer.BuildBatchFailureMessage(response.LastBatchDiagnostic)}";
             response.IsSuccess = false;
             response.EndTime = DateTime.UtcNow;
             response.ExecutionTimeSeconds = (response.EndTime - response.StartTime).TotalSeconds;
@@ -229,7 +235,7 @@ public class AasRefreshService
                 .Take(10)
                 .ToList();
 
-            ApplySlowTableMetrics(response, requestData);
+            _slowTableMetricsService.ApplySlowTableMetrics(response, requestData);
         }
         catch (Exception ex)
         {
@@ -506,7 +512,7 @@ public class AasRefreshService
                 var refreshedObjects = batch
                     .Where(b => b.result.IsSuccess)
                     .ToList();
-                rowCounts = await QueryTableRowCountsAsync(requestData.DatabaseName, refreshedObjects, cancellationToken);
+                rowCounts = await _rowCountQueryService.QueryTableRowCountsAsync(requestData.DatabaseName, refreshedObjects, cancellationToken);
             }
             else
             {
@@ -526,13 +532,13 @@ public class AasRefreshService
                 if (!saveSuccess && result.IsSuccess)
                 {
                     result.IsSuccess = false;
-                    result.ErrorMessage = BuildBatchFailureMessage(saveChangesDiagnostic);
+                    result.ErrorMessage = SaveChangesFailureAnalyzer.BuildBatchFailureMessage(saveChangesDiagnostic);
                 }
 
                 // Add row count and partition info
                 if (saveSuccess && result.IsSuccess && rowCounts != null)
                 {
-                    var count = ResolveRowCount(rowCounts, refreshObj.Table!, refreshObj.Partition);
+                    var count = RowCountQueryService.ResolveRowCount(rowCounts, refreshObj.Table!, refreshObj.Partition);
                     if (count.HasValue)
                     {
                         result.RowCount = count.Value;
@@ -625,7 +631,7 @@ public class AasRefreshService
             response.IsSuccess = false;
             response.Message = response.LastBatchDiagnostic == null
                 ? "Data refresh succeeded but Calculate failed. Model may show 'needs to be recalculated'."
-                : $"Data refresh succeeded but Calculate failed. {BuildBatchFailureMessage(response.LastBatchDiagnostic)}";
+                : $"Data refresh succeeded but Calculate failed. {SaveChangesFailureAnalyzer.BuildBatchFailureMessage(response.LastBatchDiagnostic)}";
         }
         else if (!allDataSuccess)
         {
@@ -634,242 +640,9 @@ public class AasRefreshService
             {
                 response.Message = response.LastBatchDiagnostic == null
                     ? "Some table/partition refreshes failed. See RefreshResults."
-                    : $"Some table/partition refreshes failed. {BuildBatchFailureMessage(response.LastBatchDiagnostic)}";
+                    : $"Some table/partition refreshes failed. {SaveChangesFailureAnalyzer.BuildBatchFailureMessage(response.LastBatchDiagnostic)}";
             }
         }
-    }
-
-    private async Task<Dictionary<string, long>> QueryTableRowCountsAsync(
-        string databaseName,
-        List<(RefreshObject refreshObj, RefreshResult result)> refreshedObjects,
-        CancellationToken cancellationToken)
-    {
-        var requestedTables = refreshedObjects
-            .Select(x => x.refreshObj.Table?.Trim())
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .Select(x => x!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var results = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
-        if (requestedTables.Count == 0)
-        {
-            return results;
-        }
-
-        var queries = new[]
-        {
-            "SELECT * FROM $System.DISCOVER_STORAGE_TABLES",
-            "EVALUATE INFO.STORAGETABLES()"
-        };
-
-        try
-        {
-            var connectionString = _connectionService.GetAdomdConnectionString(databaseName);
-            using var connection = new AdomdConnection(connectionString);
-            await Task.Run(() => connection.Open(), cancellationToken);
-
-            var querySucceeded = false;
-            foreach (var query in queries)
-            {
-                try
-                {
-                    using var command = connection.CreateCommand();
-                    command.CommandText = query;
-                    using var reader = await Task.Run(() => command.ExecuteReader(), cancellationToken);
-                    ReadRowCounts(reader, databaseName, requestedTables, results);
-                    querySucceeded = true;
-                    if (results.Count > 0)
-                    {
-                        break;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Row-count query failed for database '{DatabaseName}' using query '{Query}'.", databaseName, query);
-                }
-            }
-
-            if (!querySucceeded)
-            {
-                _logger.LogWarning(
-                    "All row-count queries failed for database '{DatabaseName}'. Continuing without row counts for: {Tables}",
-                    databaseName,
-                    string.Join(", ", requestedTables.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Unable to query row counts from AAS for database '{DatabaseName}'. Continuing without row counts for: {Tables}",
-                databaseName,
-                string.Join(", ", requestedTables.OrderBy(x => x, StringComparer.OrdinalIgnoreCase)));
-            return results;
-        }
-
-        foreach (var tableName in requestedTables.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
-        {
-            var count = ResolveRowCount(results, tableName, null);
-            if (count.HasValue)
-            {
-                _logger.LogInformation(
-                    "Resolved row count for table '{TableName}' in database '{DatabaseName}': {RowCount:N0}",
-                    tableName,
-                    databaseName,
-                    count.Value);
-            }
-            else
-            {
-                _logger.LogInformation(
-                    "No row count was resolved for table '{TableName}' in database '{DatabaseName}'",
-                    tableName,
-                    databaseName);
-            }
-        }
-
-        return results;
-    }
-
-    private void ReadRowCounts(
-        IDataReader reader,
-        string databaseName,
-        HashSet<string> requestedTables,
-        Dictionary<string, long> results)
-    {
-        var ordinals = Enumerable.Range(0, reader.FieldCount)
-            .ToDictionary(reader.GetName, i => i, StringComparer.OrdinalIgnoreCase);
-
-        while (reader.Read())
-        {
-            var currentDatabase = GetStringValue(reader, ordinals, "DATABASE_NAME");
-            if (!string.IsNullOrWhiteSpace(currentDatabase) &&
-                !string.Equals(currentDatabase, databaseName, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var rowCount = GetInt64Value(reader, ordinals, "ROWS_COUNT");
-            if (!rowCount.HasValue || rowCount.Value < 0)
-            {
-                continue;
-            }
-
-            var tableName = ResolveRequestedTableName(reader, ordinals, requestedTables);
-            if (string.IsNullOrWhiteSpace(tableName))
-            {
-                continue;
-            }
-
-            var partitionName = GetStringValue(reader, ordinals, "PARTITION_NAME");
-            SetMaximumRowCount(results, BuildRowCountKey(tableName, partitionName), rowCount.Value);
-            SetMaximumRowCount(results, BuildRowCountKey(tableName, null), rowCount.Value);
-        }
-    }
-
-    private static string? ResolveRequestedTableName(
-        IDataRecord record,
-        IReadOnlyDictionary<string, int> ordinals,
-        HashSet<string> requestedTables)
-    {
-        var candidates = new[]
-        {
-            GetStringValue(record, ordinals, "MEASURE_GROUP_NAME"),
-            GetStringValue(record, ordinals, "DIMENSION_NAME"),
-            GetStringValue(record, ordinals, "TABLE_ID")
-        }
-        .Where(value => !string.IsNullOrWhiteSpace(value))
-        .Select(value => value!.Trim())
-        .Distinct(StringComparer.OrdinalIgnoreCase)
-        .ToList();
-
-        foreach (var candidate in candidates)
-        {
-            if (requestedTables.Contains(candidate))
-            {
-                return candidate;
-            }
-
-            var suffixMatch = requestedTables.FirstOrDefault(t =>
-                candidate.EndsWith(t, StringComparison.OrdinalIgnoreCase));
-            if (!string.IsNullOrWhiteSpace(suffixMatch))
-            {
-                return suffixMatch;
-            }
-        }
-
-        return null;
-    }
-
-    private static string BuildRowCountKey(string tableName, string? partitionName)
-    {
-        var normalizedTable = tableName.Trim();
-        var normalizedPartition = string.IsNullOrWhiteSpace(partitionName) ? "" : partitionName.Trim();
-        return string.IsNullOrEmpty(normalizedPartition)
-            ? normalizedTable
-            : $"{normalizedTable}|{normalizedPartition}";
-    }
-
-    private static void SetMaximumRowCount(IDictionary<string, long> results, string key, long value)
-    {
-        if (results.TryGetValue(key, out var existing))
-        {
-            if (value > existing)
-            {
-                results[key] = value;
-            }
-            return;
-        }
-
-        results[key] = value;
-    }
-
-    private static long? ResolveRowCount(IReadOnlyDictionary<string, long> rowCounts, string tableName, string? partitionName)
-    {
-        var partitionKey = BuildRowCountKey(tableName, partitionName);
-        if (rowCounts.TryGetValue(partitionKey, out var partitionCount))
-        {
-            return partitionCount;
-        }
-
-        var tableKey = BuildRowCountKey(tableName, null);
-        if (rowCounts.TryGetValue(tableKey, out var tableCount))
-        {
-            return tableCount;
-        }
-
-        return null;
-    }
-
-    private static string? GetStringValue(IDataRecord record, IReadOnlyDictionary<string, int> ordinals, string columnName)
-    {
-        if (!ordinals.TryGetValue(columnName, out var ordinal) || record.IsDBNull(ordinal))
-        {
-            return null;
-        }
-
-        return record.GetValue(ordinal)?.ToString();
-    }
-
-    private static long? GetInt64Value(IDataRecord record, IReadOnlyDictionary<string, int> ordinals, string columnName)
-    {
-        if (!ordinals.TryGetValue(columnName, out var ordinal) || record.IsDBNull(ordinal))
-        {
-            return null;
-        }
-
-        return record.GetValue(ordinal) switch
-        {
-            long longValue => longValue,
-            int intValue => intValue,
-            short shortValue => shortValue,
-            byte byteValue => byteValue,
-            decimal decimalValue => (long)decimalValue,
-            double doubleValue => (long)doubleValue,
-            float floatValue => (long)floatValue,
-            string stringValue when long.TryParse(stringValue, out var parsed) => parsed,
-            _ => null
-        };
     }
 
     private async Task<SaveChangesDiagnostic> ExecuteBatchSaveChangesAsync(
@@ -884,7 +657,7 @@ public class AasRefreshService
             MaxRetryAttempts = maxRetries,
             BackoffType = DelayBackoffType.Exponential,
             Delay = TimeSpan.FromSeconds(1),
-            ShouldHandle = new PredicateBuilder().Handle<Exception>(IsDeadlockException),
+            ShouldHandle = new PredicateBuilder().Handle<Exception>(SaveChangesFailureAnalyzer.IsDeadlockException),
             OnRetry = args =>
             {
                 _logger.LogInformation(
@@ -925,7 +698,7 @@ public class AasRefreshService
         }
         catch (OperationCanceledException ex) when (saveTimeoutCts.Token.IsCancellationRequested)
         {
-            PopulateFailureDiagnostic(
+            SaveChangesFailureAnalyzer.PopulateFailureDiagnostic(
                 diagnostic,
                 ex,
                 $"SaveChanges timed out after {diagnostic.SaveChangesTimeoutMinutes} minutes. The underlying server-side command may still be running.",
@@ -941,7 +714,7 @@ public class AasRefreshService
         }
         catch (OperationCanceledException ex)
         {
-            PopulateFailureDiagnostic(
+            SaveChangesFailureAnalyzer.PopulateFailureDiagnostic(
                 diagnostic,
                 ex,
                 "SaveChanges was canceled by the host or shutdown token before completion.",
@@ -956,7 +729,7 @@ public class AasRefreshService
         }
         catch (Exception ex)
         {
-            PopulateFailureDiagnostic(
+            SaveChangesFailureAnalyzer.PopulateFailureDiagnostic(
                 diagnostic,
                 ex,
                 ex.Message,
@@ -1009,139 +782,6 @@ public class AasRefreshService
         };
     }
 
-    private static string BuildBatchFailureMessage(SaveChangesDiagnostic diagnostic)
-    {
-        var source = string.IsNullOrWhiteSpace(diagnostic.FailureSource) ? "UnknownSource" : diagnostic.FailureSource;
-        var category = string.IsNullOrWhiteSpace(diagnostic.FailureCategory) ? "UnknownCategory" : diagnostic.FailureCategory;
-        var details = string.IsNullOrWhiteSpace(diagnostic.ErrorMessage)
-            ? "No inner SaveChanges error details were surfaced."
-            : diagnostic.ErrorMessage;
-        return $"SaveChanges failed for batch {diagnostic.BatchIndex}/{diagnostic.TotalBatches} [{source}/{category}]: {details}";
-    }
-
-    private static void PopulateFailureDiagnostic(
-        SaveChangesDiagnostic diagnostic,
-        Exception? exception,
-        string fallbackMessage,
-        bool timedOut,
-        bool canceled)
-    {
-        diagnostic.IsSuccess = false;
-        diagnostic.ExceptionType = exception?.GetType().Name;
-        diagnostic.ErrorMessage = string.IsNullOrWhiteSpace(exception?.Message)
-            ? fallbackMessage
-            : FlattenExceptionMessages(exception!);
-
-        var (category, source, signals) = AnalyzeSaveChangesFailure(exception, diagnostic.ErrorMessage, timedOut, canceled);
-        diagnostic.FailureCategory = category;
-        diagnostic.FailureSource = source;
-        diagnostic.MatchedSignals = signals;
-    }
-
-    private static (string Category, string Source, List<string> Signals) AnalyzeSaveChangesFailure(
-        Exception? exception,
-        string? message,
-        bool timedOut,
-        bool canceled)
-    {
-        var combined = $"{message} {exception}".ToLowerInvariant();
-        var signals = new List<string>();
-
-        if (timedOut)
-        {
-            signals.Add("save-changes-timeout");
-            return ("Timeout", "Unknown", signals);
-        }
-
-        if (canceled)
-        {
-            signals.Add("operation-canceled");
-            return ("Canceled", "Unknown", signals);
-        }
-
-        if (combined.Contains("deadlock"))
-        {
-            signals.Add("deadlock");
-            return ("Deadlock", "Unknown", signals);
-        }
-
-        if (combined.Contains("long running xmla request") ||
-            combined.Contains("service upgrade") ||
-            combined.Contains("server restart") ||
-            combined.Contains("stuck without any updates") ||
-            combined.Contains("internal service issue") ||
-            combined.Contains("analysis services") ||
-            combined.Contains("asazure"))
-        {
-            if (combined.Contains("long running xmla request")) signals.Add("xmla-request-interrupted");
-            if (combined.Contains("service upgrade")) signals.Add("service-upgrade");
-            if (combined.Contains("server restart")) signals.Add("server-restart");
-            if (combined.Contains("stuck without any updates")) signals.Add("stuck-without-updates");
-            return ("ServiceRestartOrNodeMove", "AAS", signals);
-        }
-
-        if (combined.Contains("out of memory") ||
-            combined.Contains("memory error") ||
-            combined.Contains("resource governing") ||
-            combined.Contains("qpu") ||
-            combined.Contains("capacity"))
-        {
-            if (combined.Contains("out of memory")) signals.Add("out-of-memory");
-            if (combined.Contains("memory error")) signals.Add("memory-error");
-            if (combined.Contains("resource governing")) signals.Add("resource-governing");
-            return ("CapacityOrMemory", "AAS", signals);
-        }
-
-        if (combined.Contains("sql") ||
-            combined.Contains("ole db") ||
-            combined.Contains("odbc") ||
-            combined.Contains("provider") ||
-            combined.Contains("timeout expired") ||
-            combined.Contains("transport-level error") ||
-            combined.Contains("tcp provider") ||
-            combined.Contains("login failed") ||
-            combined.Contains("semaphore timeout period has expired") ||
-            combined.Contains("network-related") ||
-            combined.Contains("a network-related"))
-        {
-            if (combined.Contains("timeout expired")) signals.Add("sql-timeout");
-            if (combined.Contains("login failed")) signals.Add("sql-login-failed");
-            if (combined.Contains("transport-level error")) signals.Add("sql-transport-error");
-            if (combined.Contains("tcp provider")) signals.Add("sql-tcp-provider");
-            return ("DataSourceOrConnectivity", "AzureSQLOrDataSource", signals);
-        }
-
-        return ("Unknown", "Unknown", signals);
-    }
-
-    private static string FlattenExceptionMessages(Exception exception)
-    {
-        var messages = new List<string>();
-        for (var current = exception; current != null; current = current.InnerException)
-        {
-            if (!string.IsNullOrWhiteSpace(current.Message))
-            {
-                messages.Add(current.Message.Trim());
-            }
-        }
-
-        return messages.Count == 0
-            ? exception.GetType().Name
-            : string.Join(" --> ", messages.Distinct(StringComparer.Ordinal));
-    }
-
-    /// <summary>
-    /// Determines if an exception is caused by a deadlock condition
-    /// </summary>
-    private static bool IsDeadlockException(Exception ex)
-    {
-        var message = ex.Message?.ToLowerInvariant() ?? "";
-        return message.Contains("deadlock") || 
-               message.Contains("was deadlocked") ||
-               message.Contains("deadlock condition was detected") ||
-               (message.Contains("operation was canceled") && message.Contains("deadlock"));
-    }
-
     /// <summary>
     /// Start heartbeat logging for long-running operations
     /// </summary>
@@ -1164,37 +804,4 @@ public class AasRefreshService
         }
     }
 
-    private void ApplySlowTableMetrics(ActivityResponse response, EnhancedPostData requestData)
-    {
-        var dbName = requestData.OriginalRequest?.DatabaseName?.Trim() ?? "";
-        var warnSec = _config.SlowTableWarningSeconds;
-        var critSec = _config.SlowTableCriticalSeconds;
-
-        foreach (var r in response.TopSlowTables ?? [])
-        {
-            r.DatabaseName = dbName;
-            r.Severity = ClassifySlowTableSeverity(r.ProcessingTimeSeconds, warnSec, critSec);
-        }
-
-        response.PerformanceWarnings = response.RefreshResults
-            .Where(r => r.ProcessingTimeSeconds.HasValue && r.ProcessingTimeSeconds >= warnSec)
-            .Select(r => new PerformanceWarningItem
-            {
-                DatabaseName = dbName,
-                TableName = r.TableName,
-                PartitionName = r.PartitionName ?? "",
-                ProcessingTimeSeconds = r.ProcessingTimeSeconds ?? 0,
-                Severity = ClassifySlowTableSeverity(r.ProcessingTimeSeconds, warnSec, critSec) ?? "warning"
-            })
-            .OrderByDescending(w => w.ProcessingTimeSeconds)
-            .ToList();
-    }
-
-    private static string ClassifySlowTableSeverity(double? seconds, int warnSec, int critSec)
-    {
-        if (!seconds.HasValue || seconds.Value <= 0) return "normal";
-        if (seconds.Value >= critSec) return "critical";
-        if (seconds.Value >= warnSec) return "warning";
-        return "normal";
-    }
 }

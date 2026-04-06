@@ -82,7 +82,7 @@ public class RequestProcessingService
     /// <summary>
     /// Creates enhanced request data with configuration defaults
     /// </summary>
-    public virtual EnhancedPostData CreateEnhancedRequestData(PostData requestData, ConfigurationService config)
+    public virtual EnhancedPostData CreateEnhancedRequestData(PostData requestData, IConfigurationService config)
     {
         return new EnhancedPostData
         {
