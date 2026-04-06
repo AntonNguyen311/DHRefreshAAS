@@ -384,3 +384,6 @@ deploy.zip
 
 # Publish staging
 .publish/
+
+# Frontend build output
+frontend/dist/
