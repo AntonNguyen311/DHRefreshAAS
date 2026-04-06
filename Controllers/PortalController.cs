@@ -16,25 +16,25 @@ namespace DHRefreshAAS.Controllers;
 /// </summary>
 public class PortalController
 {
-    private readonly PortalAuthService _portalAuthService;
-    private readonly SelfServiceMetadataService _selfServiceMetadataService;
-    private readonly RequestProcessingService _requestProcessing;
+    private readonly IPortalAuthService _portalAuthService;
+    private readonly ISelfServiceMetadataService _selfServiceMetadataService;
+    private readonly IRequestProcessingService _requestProcessing;
     private readonly IConfigurationService _config;
-    private readonly QueueExecutionService _queueExecution;
-    private readonly StatusResponseBuilder _statusResponseBuilder;
-    private readonly ResponseService _responseService;
-    private readonly ErrorHandlingService _errorHandling;
+    private readonly IQueueExecutionService _queueExecution;
+    private readonly IStatusResponseBuilder _statusResponseBuilder;
+    private readonly IResponseService _responseService;
+    private readonly IErrorHandlingService _errorHandling;
     private readonly ILogger<PortalController> _logger;
 
     public PortalController(
-        PortalAuthService portalAuthService,
-        SelfServiceMetadataService selfServiceMetadataService,
-        RequestProcessingService requestProcessing,
+        IPortalAuthService portalAuthService,
+        ISelfServiceMetadataService selfServiceMetadataService,
+        IRequestProcessingService requestProcessing,
         IConfigurationService config,
-        QueueExecutionService queueExecution,
-        StatusResponseBuilder statusResponseBuilder,
-        ResponseService responseService,
-        ErrorHandlingService errorHandling,
+        IQueueExecutionService queueExecution,
+        IStatusResponseBuilder statusResponseBuilder,
+        IResponseService responseService,
+        IErrorHandlingService errorHandling,
         ILogger<PortalController> logger)
     {
         _portalAuthService = portalAuthService;

@@ -10,7 +10,7 @@ namespace DHRefreshAAS.Services;
 /// All mutating methods are synchronized per-operation to protect List&lt;string&gt; properties
 /// on OperationStatus from concurrent modification by parallel Task.Run callbacks.
 /// </summary>
-public class ProgressTrackingService
+public class ProgressTrackingService : IProgressTrackingService
 {
     private readonly ILogger<ProgressTrackingService> _logger;
     private readonly ConcurrentDictionary<string, object> _locks = new();
@@ -103,6 +103,14 @@ public class ProgressTrackingService
             _logger.LogInformation("Progress tracking initialized for operation {OperationId} with {TablesCount} tables",
                 operation.OperationId, operation.TablesCount);
         }
+    }
+
+    /// <summary>
+    /// Removes the per-operation lock entry. Call when an operation reaches a terminal state.
+    /// </summary>
+    public void RemoveOperation(string operationId)
+    {
+        _locks.TryRemove(operationId, out _);
     }
 
     /// <summary>

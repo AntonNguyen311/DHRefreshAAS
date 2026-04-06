@@ -13,13 +13,20 @@ namespace DHRefreshAAS.Tests;
 /// </summary>
 internal static class TestHttpHelpers
 {
+    private static readonly IServiceProvider SharedServiceProvider = BuildSharedServiceProvider();
+
+    private static IServiceProvider BuildSharedServiceProvider()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        return services.BuildServiceProvider();
+    }
+
     public static Mock<FunctionContext> CreateFunctionContextMock()
     {
         var mockContext = new Mock<FunctionContext>();
         mockContext.Setup(c => c.CancellationToken).Returns(CancellationToken.None);
-        var services = new ServiceCollection();
-        services.AddLogging();
-        mockContext.Setup(c => c.InstanceServices).Returns(services.BuildServiceProvider());
+        mockContext.Setup(c => c.InstanceServices).Returns(SharedServiceProvider);
         return mockContext;
     }
 

@@ -13,16 +13,16 @@ namespace DHRefreshAAS.Tests;
 public class DiagnosticsControllerTests
 {
     private readonly Mock<IConnectionService> _mockConnectionService;
-    private readonly Mock<ResponseService> _mockResponseService;
-    private readonly Mock<ErrorHandlingService> _mockErrorHandling;
+    private readonly Mock<IResponseService> _mockResponseService;
+    private readonly Mock<IErrorHandlingService> _mockErrorHandling;
     private readonly Mock<ILogger<DiagnosticsController>> _mockLogger;
     private readonly DiagnosticsController _controller;
 
     public DiagnosticsControllerTests()
     {
         _mockConnectionService = new Mock<IConnectionService>();
-        _mockResponseService = new Mock<ResponseService>();
-        _mockErrorHandling = new Mock<ErrorHandlingService>(Mock.Of<ILogger<ErrorHandlingService>>());
+        _mockResponseService = new Mock<IResponseService>();
+        _mockErrorHandling = new Mock<IErrorHandlingService>();
         _mockLogger = new Mock<ILogger<DiagnosticsController>>();
 
         _controller = new DiagnosticsController(

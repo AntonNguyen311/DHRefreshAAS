@@ -14,12 +14,12 @@ namespace DHRefreshAAS.Services;
 /// Manages the lifecycle of queued refresh operations: enqueue, lease acquisition,
 /// background execution, heartbeat, and queue promotion.
 /// </summary>
-public class QueueExecutionService
+public class QueueExecutionService : IQueueExecutionService
 {
     private readonly IConfigurationService _config;
     private readonly IAasRefreshService _aasRefreshService;
     private readonly IOperationStorageService _operationStorage;
-    private readonly ProgressTrackingService _progressTracking;
+    private readonly IProgressTrackingService _progressTracking;
     private readonly OperationCleanupService _cleanupService;
     private readonly IHostApplicationLifetime _hostApplicationLifetime;
     private readonly ILogger<QueueExecutionService> _logger;
@@ -28,7 +28,7 @@ public class QueueExecutionService
         IConfigurationService config,
         IAasRefreshService aasRefreshService,
         IOperationStorageService operationStorage,
-        ProgressTrackingService progressTracking,
+        IProgressTrackingService progressTracking,
         OperationCleanupService cleanupService,
         IHostApplicationLifetime hostApplicationLifetime,
         ILogger<QueueExecutionService> logger)
@@ -142,22 +142,30 @@ public class QueueExecutionService
                 {
                     _ = Task.Run(async () =>
                     {
-                        var op = await _operationStorage.GetOperationAsync(operationId);
-                        if (op != null)
+                        try
                         {
-                            if (isSuccess)
+                            var op = await _operationStorage.GetOperationAsync(operationId);
+                            if (op != null)
                             {
-                                _progressTracking.CompleteTable(op, tableName);
-                            }
-                            else
-                            {
-                                _progressTracking.FailTable(op, tableName, errorMessage);
-                            }
+                                if (isSuccess)
+                                {
+                                    _progressTracking.CompleteTable(op, tableName);
+                                }
+                                else
+                                {
+                                    _progressTracking.FailTable(op, tableName, errorMessage);
+                                }
 
-                            await _operationStorage.UpsertOperationAsync(op);
+                                await _operationStorage.UpsertOperationAsync(op);
 
-                            _logger.LogInformation("Operation {OperationId} progress: {Completed}/{Total} tables completed ({Failed} failed, {InProgress} in progress)",
-                                operationId, op.TablesCompleted, op.TablesCount, op.TablesFailed, op.TablesInProgress);
+                                _logger.LogInformation("Operation {OperationId} progress: {Completed}/{Total} tables completed ({Failed} failed, {InProgress} in progress)",
+                                    operationId, op.TablesCompleted, op.TablesCount, op.TablesFailed, op.TablesInProgress);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Failed to update progress for operation {OperationId}, table {TableName}: {ErrorMessage}",
+                                operationId, tableName, ex.Message);
                         }
                     });
                 });
@@ -167,22 +175,30 @@ public class QueueExecutionService
                 {
                     _ = Task.Run(async () =>
                     {
-                        var op = await _operationStorage.GetOperationAsync(operationId);
-                        if (op != null)
+                        try
                         {
-                            _progressTracking.StartSaveChanges(op);
-                            op.LastBatchIndex = diagnostic.BatchIndex;
-                            op.LastBatchTables = diagnostic.Tables.ToList();
-                            op.LastBatchError = diagnostic.ErrorMessage;
-                            op.LastBatchFailureCategory = diagnostic.FailureCategory;
-                            op.LastBatchFailureSource = diagnostic.FailureSource;
-                            await _operationStorage.UpsertOperationAsync(op);
-                            _logger.LogInformation(
-                                "Operation {OperationId} entering SaveChanges phase for batch {BatchIndex}/{TotalBatches}: {Tables}",
-                                operationId,
-                                diagnostic.BatchIndex,
-                                diagnostic.TotalBatches,
-                                string.Join(", ", diagnostic.Tables));
+                            var op = await _operationStorage.GetOperationAsync(operationId);
+                            if (op != null)
+                            {
+                                _progressTracking.StartSaveChanges(op);
+                                op.LastBatchIndex = diagnostic.BatchIndex;
+                                op.LastBatchTables = diagnostic.Tables.ToList();
+                                op.LastBatchError = diagnostic.ErrorMessage;
+                                op.LastBatchFailureCategory = diagnostic.FailureCategory;
+                                op.LastBatchFailureSource = diagnostic.FailureSource;
+                                await _operationStorage.UpsertOperationAsync(op);
+                                _logger.LogInformation(
+                                    "Operation {OperationId} entering SaveChanges phase for batch {BatchIndex}/{TotalBatches}: {Tables}",
+                                    operationId,
+                                    diagnostic.BatchIndex,
+                                    diagnostic.TotalBatches,
+                                    string.Join(", ", diagnostic.Tables));
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, "Failed to update SaveChanges diagnostic for operation {OperationId}, batch {BatchIndex}: {ErrorMessage}",
+                                operationId, diagnostic.BatchIndex, ex.Message);
                         }
                     });
                 });
@@ -228,17 +244,23 @@ public class QueueExecutionService
             }
             catch (Exception ex)
             {
-                var op = await _operationStorage.GetOperationAsync(operationId);
-                if (op != null)
-                {
-                    op.Status = OperationStatusEnum.Failed;
-                    op.EndTime = DateTime.UtcNow;
-                    op.ErrorMessage = ex.Message;
-                    _progressTracking.UpdateProgress(op); // Final progress update
-                    await _operationStorage.UpsertOperationAsync(op);
-                }
-
                 _logger.LogError(ex, "Background refresh operation {OperationId} failed: {ErrorMessage}", operationId, ex.Message);
+                try
+                {
+                    var op = await _operationStorage.GetOperationAsync(operationId);
+                    if (op != null)
+                    {
+                        op.Status = OperationStatusEnum.Failed;
+                        op.EndTime = DateTime.UtcNow;
+                        op.ErrorMessage = ex.Message;
+                        _progressTracking.UpdateProgress(op);
+                        await _operationStorage.UpsertOperationAsync(op);
+                    }
+                }
+                catch (Exception storageEx)
+                {
+                    _logger.LogError(storageEx, "Failed to persist error state for operation {OperationId}: {ErrorMessage}", operationId, storageEx.Message);
+                }
             }
             finally
             {
@@ -251,6 +273,7 @@ public class QueueExecutionService
                     }
                     catch (OperationCanceledException)
                     {
+                        // Expected when heartbeat CTS is cancelled during shutdown
                     }
                 }
 
@@ -260,6 +283,7 @@ public class QueueExecutionService
                 }
 
                 _cleanupService.UntrackOperation(operationId);
+                _progressTracking.RemoveOperation(operationId);
 
                 var finalScope = operation?.QueueScope;
                 if (!string.IsNullOrWhiteSpace(finalScope))

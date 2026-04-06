@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace DHRefreshAAS.Services;
 
-public class PortalAuthService
+public class PortalAuthService : IPortalAuthService
 {
     private static readonly JsonSerializerOptions PrincipalJsonOptions = new()
     {

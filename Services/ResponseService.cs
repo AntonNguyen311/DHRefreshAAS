@@ -7,7 +7,7 @@ namespace DHRefreshAAS.Services;
 /// <summary>
 /// Service for creating standardized HTTP responses
 /// </summary>
-public class ResponseService
+public class ResponseService : IResponseService
 {
     private readonly JsonSerializerOptions _jsonOptions;
 

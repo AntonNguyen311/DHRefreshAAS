@@ -17,8 +17,8 @@ public class AasRefreshServiceTests
 {
     private readonly Mock<IConfigurationService> _mockConfig;
     private readonly Mock<IConnectionService> _mockConnectionService;
-    private readonly Mock<AasScalingService> _mockScalingService;
-    private readonly Mock<ElasticPoolScalingService> _mockElasticPoolScalingService;
+    private readonly Mock<IAasScalingService> _mockScalingService;
+    private readonly Mock<IElasticPoolScalingService> _mockElasticPoolScalingService;
     private readonly Mock<ILogger<AasRefreshService>> _mockLogger;
     private readonly Mock<IOperationStorageService> _mockOperationStorage;
     private readonly Mock<RowCountQueryService> _mockRowCountQueryService;
@@ -28,20 +28,21 @@ public class AasRefreshServiceTests
     public AasRefreshServiceTests()
     {
         _mockConfig = new Mock<IConfigurationService>();
+        _mockConfig.Setup(x => x.HeartbeatIntervalSeconds).Returns(3600);
         _mockConnectionService = new Mock<IConnectionService>();
-        _mockScalingService = new Mock<AasScalingService>(_mockConfig.Object, Mock.Of<ILogger<AasScalingService>>());
-        _mockElasticPoolScalingService = new Mock<ElasticPoolScalingService>(_mockConfig.Object, Mock.Of<ILogger<ElasticPoolScalingService>>());
+        _mockScalingService = new Mock<IAasScalingService>();
+        _mockElasticPoolScalingService = new Mock<IElasticPoolScalingService>();
         _mockLogger = new Mock<ILogger<AasRefreshService>>();
         _mockOperationStorage = new Mock<IOperationStorageService>();
         _mockRowCountQueryService = new Mock<RowCountQueryService>(_mockConnectionService.Object, Mock.Of<ILogger<RowCountQueryService>>());
         _mockSlowTableMetricsService = new Mock<SlowTableMetricsService>(_mockConfig.Object);
-        _service = new AasRefreshService(_mockConfig.Object, _mockConnectionService.Object, _mockScalingService.Object, _mockElasticPoolScalingService.Object, new RefreshConcurrencyService(Mock.Of<ILogger<RefreshConcurrencyService>>()), _mockOperationStorage.Object, _mockRowCountQueryService.Object, _mockSlowTableMetricsService.Object, _mockLogger.Object);
+        _service = new AasRefreshService(_mockConfig.Object, _mockConnectionService.Object, _mockScalingService.Object, _mockElasticPoolScalingService.Object, Mock.Of<IRefreshConcurrencyService>(), _mockOperationStorage.Object, _mockRowCountQueryService.Object, _mockSlowTableMetricsService.Object, _mockLogger.Object);
     }
 
     [Fact]
     public void Constructor_ValidParameters_CreatesService()
     {
-        var service = new AasRefreshService(_mockConfig.Object, _mockConnectionService.Object, _mockScalingService.Object, _mockElasticPoolScalingService.Object, new RefreshConcurrencyService(Mock.Of<ILogger<RefreshConcurrencyService>>()), _mockOperationStorage.Object, _mockRowCountQueryService.Object, _mockSlowTableMetricsService.Object, _mockLogger.Object);
+        var service = new AasRefreshService(_mockConfig.Object, _mockConnectionService.Object, _mockScalingService.Object, _mockElasticPoolScalingService.Object, Mock.Of<IRefreshConcurrencyService>(), _mockOperationStorage.Object, _mockRowCountQueryService.Object, _mockSlowTableMetricsService.Object, _mockLogger.Object);
         Assert.NotNull(service);
     }
 
@@ -49,21 +50,21 @@ public class AasRefreshServiceTests
     public void Constructor_NullConfig_ThrowsArgumentNullException()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            new AasRefreshService(null!, _mockConnectionService.Object, _mockScalingService.Object, _mockElasticPoolScalingService.Object, new RefreshConcurrencyService(Mock.Of<ILogger<RefreshConcurrencyService>>()), _mockOperationStorage.Object, _mockRowCountQueryService.Object, _mockSlowTableMetricsService.Object, _mockLogger.Object));
+            new AasRefreshService(null!, _mockConnectionService.Object, _mockScalingService.Object, _mockElasticPoolScalingService.Object, Mock.Of<IRefreshConcurrencyService>(), _mockOperationStorage.Object, _mockRowCountQueryService.Object, _mockSlowTableMetricsService.Object, _mockLogger.Object));
     }
 
     [Fact]
     public void Constructor_NullConnectionService_ThrowsArgumentNullException()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            new AasRefreshService(_mockConfig.Object, null!, _mockScalingService.Object, _mockElasticPoolScalingService.Object, new RefreshConcurrencyService(Mock.Of<ILogger<RefreshConcurrencyService>>()), _mockOperationStorage.Object, _mockRowCountQueryService.Object, _mockSlowTableMetricsService.Object, _mockLogger.Object));
+            new AasRefreshService(_mockConfig.Object, null!, _mockScalingService.Object, _mockElasticPoolScalingService.Object, Mock.Of<IRefreshConcurrencyService>(), _mockOperationStorage.Object, _mockRowCountQueryService.Object, _mockSlowTableMetricsService.Object, _mockLogger.Object));
     }
 
     [Fact]
     public void Constructor_NullLogger_ThrowsArgumentNullException()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            new AasRefreshService(_mockConfig.Object, _mockConnectionService.Object, _mockScalingService.Object, _mockElasticPoolScalingService.Object, new RefreshConcurrencyService(Mock.Of<ILogger<RefreshConcurrencyService>>()), _mockOperationStorage.Object, _mockRowCountQueryService.Object, _mockSlowTableMetricsService.Object, null!));
+            new AasRefreshService(_mockConfig.Object, _mockConnectionService.Object, _mockScalingService.Object, _mockElasticPoolScalingService.Object, Mock.Of<IRefreshConcurrencyService>(), _mockOperationStorage.Object, _mockRowCountQueryService.Object, _mockSlowTableMetricsService.Object, null!));
     }
 
     [Fact]

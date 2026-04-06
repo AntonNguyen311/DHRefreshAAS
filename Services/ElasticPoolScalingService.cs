@@ -11,17 +11,19 @@ namespace DHRefreshAAS;
 /// Scales Azure SQL Elastic Pool up before AAS refresh and back down after,
 /// following the same pattern as AasScalingService.
 /// </summary>
-public class ElasticPoolScalingService
+public class ElasticPoolScalingService : IElasticPoolScalingService
 {
     private readonly IConfigurationService _config;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<ElasticPoolScalingService> _logger;
-    private static readonly HttpClient _httpClient = new();
 
-    public ElasticPoolScalingService(IConfigurationService config, ILogger<ElasticPoolScalingService> logger)
+    public ElasticPoolScalingService(IConfigurationService config, IHttpClientFactory httpClientFactory, ILogger<ElasticPoolScalingService> logger)
     {
         ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(httpClientFactory);
         ArgumentNullException.ThrowIfNull(logger);
         _config = config;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
@@ -87,7 +89,7 @@ public class ElasticPoolScalingService
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
-            var response = await _httpClient.SendAsync(request, cancellationToken);
+            var response = await _httpClientFactory.CreateClient().SendAsync(request, cancellationToken);
             var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
 
             if (!response.IsSuccessStatusCode)
@@ -133,12 +135,21 @@ public class ElasticPoolScalingService
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        if (!response.IsSuccessStatusCode) return 0;
+        var response = await _httpClientFactory.CreateClient().SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("Failed to get current Elastic Pool DTU. Status: {StatusCode}", response.StatusCode);
+            return -1;
+        }
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         using var doc = JsonDocument.Parse(body);
-        return doc.RootElement.GetProperty("sku").GetProperty("capacity").GetInt32();
+        if (!doc.RootElement.TryGetProperty("sku", out var sku) || !sku.TryGetProperty("capacity", out var capacity))
+        {
+            _logger.LogWarning("Elastic Pool JSON missing sku.capacity property");
+            return -1;
+        }
+        return capacity.GetInt32();
     }
 
     private async Task<bool> WaitForScalingCompleteAsync(int targetDtu, CancellationToken cancellationToken)
@@ -177,12 +188,21 @@ public class ElasticPoolScalingService
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        if (!response.IsSuccessStatusCode) return null;
+        var response = await _httpClientFactory.CreateClient().SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("Failed to get Elastic Pool state. Status: {StatusCode}", response.StatusCode);
+            return null;
+        }
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         using var doc = JsonDocument.Parse(body);
-        return doc.RootElement.GetProperty("properties").GetProperty("state").GetString();
+        if (!doc.RootElement.TryGetProperty("properties", out var props) || !props.TryGetProperty("state", out var state))
+        {
+            _logger.LogWarning("Elastic Pool JSON missing properties.state");
+            return null;
+        }
+        return state.GetString();
     }
 
     private async Task<string> GetManagementTokenAsync(CancellationToken cancellationToken)

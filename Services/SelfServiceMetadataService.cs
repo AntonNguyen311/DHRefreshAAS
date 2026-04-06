@@ -6,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace DHRefreshAAS.Services;
 
-public class SelfServiceMetadataService
+public class SelfServiceMetadataService : ISelfServiceMetadataService
 {
     private readonly IConfigurationService _config;
     private readonly IConnectionService _connectionService;

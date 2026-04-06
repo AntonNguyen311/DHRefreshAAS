@@ -1,7 +1,6 @@
 using DHRefreshAAS.Enums;
 using DHRefreshAAS.Models;
 using DHRefreshAAS.Services;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
@@ -10,14 +9,14 @@ namespace DHRefreshAAS.Tests;
 
 public class OperationCleanupServiceTests
 {
-    private readonly Mock<OperationStorageService> _mockOperationStorage;
-    private readonly Mock<ConfigurationService> _mockConfig;
+    private readonly Mock<IOperationStorageService> _mockOperationStorage;
+    private readonly Mock<IConfigurationService> _mockConfig;
     private readonly OperationCleanupService _service;
 
     public OperationCleanupServiceTests()
     {
-        _mockOperationStorage = new Mock<OperationStorageService>(Mock.Of<ILogger<OperationStorageService>>());
-        _mockConfig = new Mock<ConfigurationService>(Mock.Of<IConfiguration>(), Mock.Of<ILogger<ConfigurationService>>());
+        _mockOperationStorage = new Mock<IOperationStorageService>();
+        _mockConfig = new Mock<IConfigurationService>();
         _mockConfig.SetupGet(x => x.ZombieTimeoutMinutes).Returns(30);
         _service = new OperationCleanupService(_mockOperationStorage.Object, _mockConfig.Object, Mock.Of<ILogger<OperationCleanupService>>());
     }

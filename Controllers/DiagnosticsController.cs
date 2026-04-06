@@ -13,14 +13,14 @@ namespace DHRefreshAAS.Controllers;
 public class DiagnosticsController
 {
     private readonly IConnectionService _connectionService;
-    private readonly ResponseService _responseService;
-    private readonly ErrorHandlingService _errorHandling;
+    private readonly IResponseService _responseService;
+    private readonly IErrorHandlingService _errorHandling;
     private readonly ILogger<DiagnosticsController> _logger;
 
     public DiagnosticsController(
         IConnectionService connectionService,
-        ResponseService responseService,
-        ErrorHandlingService errorHandling,
+        IResponseService responseService,
+        IErrorHandlingService errorHandling,
         ILogger<DiagnosticsController> logger)
     {
         _connectionService = connectionService;

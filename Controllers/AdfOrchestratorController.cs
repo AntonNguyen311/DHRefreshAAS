@@ -10,15 +10,15 @@ namespace DHRefreshAAS.Controllers;
 
 public class AdfOrchestratorController
 {
-    private readonly AdfOrchestratorGateService _gateService;
-    private readonly ResponseService _responseService;
-    private readonly ErrorHandlingService _errorHandling;
+    private readonly IAdfOrchestratorGateService _gateService;
+    private readonly IResponseService _responseService;
+    private readonly IErrorHandlingService _errorHandling;
     private readonly ILogger<AdfOrchestratorController> _logger;
 
     public AdfOrchestratorController(
-        AdfOrchestratorGateService gateService,
-        ResponseService responseService,
-        ErrorHandlingService errorHandling,
+        IAdfOrchestratorGateService gateService,
+        IResponseService responseService,
+        IErrorHandlingService errorHandling,
         ILogger<AdfOrchestratorController> logger)
     {
         ArgumentNullException.ThrowIfNull(gateService);

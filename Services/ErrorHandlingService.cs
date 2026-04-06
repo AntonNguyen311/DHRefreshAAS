@@ -8,7 +8,7 @@ namespace DHRefreshAAS.Services;
 /// <summary>
 /// Service for standardized error handling and response creation
 /// </summary>
-public class ErrorHandlingService
+public class ErrorHandlingService : IErrorHandlingService
 {
     private readonly ILogger<ErrorHandlingService> _logger;
 

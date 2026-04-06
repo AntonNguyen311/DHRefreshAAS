@@ -2,7 +2,6 @@ using System.Text;
 using DHRefreshAAS.Models;
 using DHRefreshAAS.Services;
 using Microsoft.Azure.Functions.Worker.Http;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Xunit;
@@ -14,7 +13,7 @@ public class PortalAuthServiceTests
     [Fact]
     public void GetPortalUser_ParsesEasyAuthPrincipal()
     {
-        var mockConfig = new Mock<ConfigurationService>(Mock.Of<IConfiguration>(), Mock.Of<ILogger<ConfigurationService>>());
+        var mockConfig = new Mock<IConfigurationService>();
         var service = new PortalAuthService(mockConfig.Object, Mock.Of<ILogger<PortalAuthService>>());
         var request = CreateRequest(new
         {
@@ -42,7 +41,7 @@ public class PortalAuthServiceTests
     [Fact]
     public void CanSubmitRefresh_UsesConfiguredRoles()
     {
-        var mockConfig = new Mock<ConfigurationService>(Mock.Of<IConfiguration>(), Mock.Of<ILogger<ConfigurationService>>());
+        var mockConfig = new Mock<IConfigurationService>();
         mockConfig.Setup(x => x.PortalRefreshRoles).Returns(new[] { "Cube.Refresh" });
         mockConfig.Setup(x => x.PortalRefreshGroups).Returns(Array.Empty<string>());
         mockConfig.Setup(x => x.PortalAdminRoles).Returns(Array.Empty<string>());

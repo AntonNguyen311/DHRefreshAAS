@@ -7,17 +7,19 @@ using Microsoft.Extensions.Logging;
 
 namespace DHRefreshAAS;
 
-public class AasScalingService
+public class AasScalingService : IAasScalingService
 {
     private readonly IConfigurationService _config;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<AasScalingService> _logger;
-    private static readonly HttpClient _httpClient = new();
 
-    public AasScalingService(IConfigurationService config, ILogger<AasScalingService> logger)
+    public AasScalingService(IConfigurationService config, IHttpClientFactory httpClientFactory, ILogger<AasScalingService> logger)
     {
         ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(httpClientFactory);
         ArgumentNullException.ThrowIfNull(logger);
         _config = config;
+        _httpClientFactory = httpClientFactory;
         _logger = logger;
     }
 
@@ -92,7 +94,7 @@ public class AasScalingService
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
-            var response = await _httpClient.SendAsync(request, cancellationToken);
+            var response = await _httpClientFactory.CreateClient().SendAsync(request, cancellationToken);
             var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
 
             if (!response.IsSuccessStatusCode)
@@ -139,13 +141,20 @@ public class AasScalingService
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        if (!response.IsSuccessStatusCode) return null;
+        var response = await _httpClientFactory.CreateClient().SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("Failed to get current AAS SKU. Status: {StatusCode}", response.StatusCode);
+            return null;
+        }
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         using var doc = JsonDocument.Parse(body);
         if (!doc.RootElement.TryGetProperty("sku", out var sku) || !sku.TryGetProperty("name", out var name))
+        {
+            _logger.LogWarning("AAS resource JSON missing sku.name property");
             return null;
+        }
         return name.GetString();
     }
 
@@ -186,12 +195,21 @@ public class AasScalingService
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var response = await _httpClient.SendAsync(request, cancellationToken);
-        if (!response.IsSuccessStatusCode) return null;
+        var response = await _httpClientFactory.CreateClient().SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            _logger.LogWarning("Failed to get AAS server state. Status: {StatusCode}", response.StatusCode);
+            return null;
+        }
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         using var doc = JsonDocument.Parse(body);
-        return doc.RootElement.GetProperty("properties").GetProperty("state").GetString();
+        if (!doc.RootElement.TryGetProperty("properties", out var props) || !props.TryGetProperty("state", out var state))
+        {
+            _logger.LogWarning("AAS resource JSON missing properties.state");
+            return null;
+        }
+        return state.GetString();
     }
 
     private async Task<string> GetManagementTokenAsync(CancellationToken cancellationToken)

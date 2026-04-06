@@ -98,6 +98,7 @@ public class ConfigurationService : IConfigurationService
     public virtual int MaxConcurrentRefreshes => GetConfigValue("MAX_CONCURRENT_REFRESHES", 5);
     public virtual int SlowTableWarningSeconds => GetConfigValue("SLOW_TABLE_WARNING_SECONDS", 120);
     public virtual int SlowTableCriticalSeconds => GetConfigValue("SLOW_TABLE_CRITICAL_SECONDS", 300);
+    public virtual int OperationRetentionDays => GetConfigValue("OPERATION_RETENTION_DAYS", 30);
 
     // Elastic Pool Auto-Scaling settings
     public virtual bool EnableElasticPoolAutoScaling => GetConfigValue("ENABLE_ELASTIC_POOL_AUTO_SCALING", false);

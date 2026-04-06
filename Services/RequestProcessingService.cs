@@ -8,7 +8,7 @@ namespace DHRefreshAAS.Services;
 /// <summary>
 /// Service for processing and validating HTTP requests
 /// </summary>
-public class RequestProcessingService
+public class RequestProcessingService : IRequestProcessingService
 {
     private readonly ILogger<RequestProcessingService> _logger;
     private static readonly JsonSerializerOptions RequestJsonOptions = new()

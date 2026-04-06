@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Azure.Functions.Worker.Http;
+using Microsoft.Extensions.Logging;
 using DHRefreshAAS.Enums;
 using DHRefreshAAS.Models;
 
@@ -13,20 +14,23 @@ namespace DHRefreshAAS.Services;
 /// Builds HTTP status responses for operation monitoring.
 /// Shared by RefreshController and PortalController.
 /// </summary>
-public class StatusResponseBuilder
+public class StatusResponseBuilder : IStatusResponseBuilder
 {
     private readonly IOperationStorageService _operationStorage;
-    private readonly ProgressTrackingService _progressTracking;
-    private readonly ResponseService _responseService;
+    private readonly IProgressTrackingService _progressTracking;
+    private readonly IResponseService _responseService;
+    private readonly ILogger<StatusResponseBuilder> _logger;
 
     public StatusResponseBuilder(
         IOperationStorageService operationStorage,
-        ProgressTrackingService progressTracking,
-        ResponseService responseService)
+        IProgressTrackingService progressTracking,
+        IResponseService responseService,
+        ILogger<StatusResponseBuilder> logger)
     {
         _operationStorage = operationStorage;
         _progressTracking = progressTracking;
         _responseService = responseService;
+        _logger = logger;
     }
 
     public virtual async Task<HttpResponseData> GetSpecificOperationStatusAsync(
@@ -209,7 +213,7 @@ public class StatusResponseBuilder
         return await _responseService.CreateStatusResponseAsync(req, statusData);
     }
 
-    public static object[]? ParseTopSlowTables(string? resultJson)
+    public object[]? ParseTopSlowTables(string? resultJson)
     {
         if (string.IsNullOrWhiteSpace(resultJson)) return null;
         try
@@ -237,13 +241,14 @@ public class StatusResponseBuilder
             var ordered = rows.OrderByDescending(x => x.SortKey).Select(x => x.Row).ToArray();
             return ordered.Length > 0 ? ordered : null;
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
+            _logger.LogWarning(ex, "Failed to parse topSlowTables from operation result JSON");
             return null;
         }
     }
 
-    public static object[]? ParsePerformanceWarnings(string? resultJson)
+    public object[]? ParsePerformanceWarnings(string? resultJson)
     {
         if (string.IsNullOrWhiteSpace(resultJson)) return null;
         try
@@ -270,8 +275,9 @@ public class StatusResponseBuilder
             var ordered = rows.OrderByDescending(x => x.SortKey).Select(x => x.Row).ToArray();
             return ordered.Length > 0 ? ordered : null;
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
+            _logger.LogWarning(ex, "Failed to parse performanceWarnings from operation result JSON");
             return null;
         }
     }

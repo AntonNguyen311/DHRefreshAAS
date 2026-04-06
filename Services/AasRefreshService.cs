@@ -14,9 +14,9 @@ public class AasRefreshService : IAasRefreshService
 {
     private readonly IConfigurationService _config;
     private readonly IConnectionService _connectionService;
-    private readonly AasScalingService _scalingService;
-    private readonly ElasticPoolScalingService _elasticPoolScalingService;
-    private readonly RefreshConcurrencyService _concurrencyService;
+    private readonly IAasScalingService _scalingService;
+    private readonly IElasticPoolScalingService _elasticPoolScalingService;
+    private readonly IRefreshConcurrencyService _concurrencyService;
     private readonly IOperationStorageService _operationStorage;
     private readonly RowCountQueryService _rowCountQueryService;
     private readonly SlowTableMetricsService _slowTableMetricsService;
@@ -25,9 +25,9 @@ public class AasRefreshService : IAasRefreshService
     public AasRefreshService(
         IConfigurationService config,
         IConnectionService connectionService,
-        AasScalingService scalingService,
-        ElasticPoolScalingService elasticPoolScalingService,
-        RefreshConcurrencyService concurrencyService,
+        IAasScalingService scalingService,
+        IElasticPoolScalingService elasticPoolScalingService,
+        IRefreshConcurrencyService concurrencyService,
         IOperationStorageService operationStorage,
         RowCountQueryService rowCountQueryService,
         SlowTableMetricsService slowTableMetricsService,
@@ -248,6 +248,7 @@ public class AasRefreshService : IAasRefreshService
         finally
         {
             await _connectionService.SafeDisconnectAsync(asSrv);
+            _concurrencyService.ReleaseDatabaseSemaphore(requestData.OriginalRequest?.DatabaseName ?? "");
 
             // ALWAYS scale down - even if refresh fails, crashes, or times out
             // BUT only if no other operations are still running (parallel per-database queues)
@@ -791,7 +792,7 @@ public class AasRefreshService : IAasRefreshService
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                await Task.Delay(TimeSpan.FromSeconds(_config.HeartbeatIntervalSeconds), cancellationToken);
+                await Task.Delay(TimeSpan.FromSeconds(Math.Max(5, _config.HeartbeatIntervalSeconds)), cancellationToken);
                 var memoryUsage = GC.GetTotalMemory(false) / 1024 / 1024;
                 _logger.LogInformation("[HEARTBEAT] Operation still running at {CurrentTime:yyyy-MM-dd HH:mm:ss} UTC - Memory: {MemoryUsage} MB",
                     DateTime.UtcNow, memoryUsage);

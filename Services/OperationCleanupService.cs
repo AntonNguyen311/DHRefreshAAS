@@ -38,6 +38,23 @@ public class OperationCleanupService : IHostedService
         {
             _logger.LogError(ex, "Zombie cleanup on startup failed: {ErrorMessage}", ex.Message);
         }
+
+        try
+        {
+            var retentionDays = _config.OperationRetentionDays;
+            if (retentionDays > 0)
+            {
+                var deleted = await _operationStorage.DeleteExpiredOperationsAsync(retentionDays, cancellationToken);
+                if (deleted > 0)
+                {
+                    _logger.LogInformation("Retention policy: removed {Count} expired operations (>{Days} days old)", deleted, retentionDays);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Retention cleanup on startup failed: {ErrorMessage}", ex.Message);
+        }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)

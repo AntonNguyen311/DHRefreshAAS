@@ -26,6 +26,7 @@ public interface IConfigurationService
     int MaxConcurrentRefreshes { get; }
     int SlowTableWarningSeconds { get; }
     int SlowTableCriticalSeconds { get; }
+    int OperationRetentionDays { get; }
 
     bool EnableElasticPoolAutoScaling { get; }
     int ElasticPoolScaleUpDtu { get; }

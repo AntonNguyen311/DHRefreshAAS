@@ -630,6 +630,62 @@ public class OperationStorageService : IOperationStorageService
             .ToList();
     }
 
+    /// <summary>
+    /// Delete completed/failed operations older than the retention period.
+    /// Running and queued operations are never deleted.
+    /// </summary>
+    public virtual async Task<int> DeleteExpiredOperationsAsync(int retentionDays, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await EnsureTableInitializedAsync(cancellationToken);
+            var cutoff = DateTimeOffset.UtcNow.AddDays(-retentionDays);
+            var filter = $"PartitionKey eq '{OperationPartitionKey}' and Timestamp lt datetime'{cutoff.UtcDateTime:yyyy-MM-ddTHH:mm:ssZ}'";
+
+            var toDelete = new List<(string partitionKey, string rowKey, ETag etag)>();
+            await foreach (var entity in _tableClient.QueryAsync<OperationEntity>(
+                filter: filter,
+                select: new[] { "PartitionKey", "RowKey", "Status" },
+                cancellationToken: cancellationToken))
+            {
+                var status = entity.Status?.ToLowerInvariant();
+                if (status == OperationStatusEnum.Completed || status == OperationStatusEnum.Failed)
+                {
+                    toDelete.Add((entity.PartitionKey, entity.RowKey, entity.ETag));
+                }
+            }
+
+            if (toDelete.Count == 0)
+            {
+                return 0;
+            }
+
+            var deleted = 0;
+            foreach (var (partitionKey, rowKey, etag) in toDelete)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    await _tableClient.DeleteEntityAsync(partitionKey, rowKey, etag, cancellationToken);
+                    deleted++;
+                }
+                catch (RequestFailedException ex) when (ex.Status == 404 || ex.Status == 412)
+                {
+                    // Already deleted or modified by another process — skip
+                }
+            }
+
+            _logger.LogInformation("Retention cleanup: deleted {Deleted}/{Total} expired operations older than {Days} days",
+                deleted, toDelete.Count, retentionDays);
+            return deleted;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Failed to delete expired operations: {ErrorMessage}", ex.Message);
+            return 0;
+        }
+    }
+
     private static bool IsLeaseStale(QueueLeaseEntity lease, TimeSpan staleAfter)
     {
         var lastHeartbeat = lease.LeaseHeartbeatTime == default ? lease.LeaseAcquiredTime : lease.LeaseHeartbeatTime;

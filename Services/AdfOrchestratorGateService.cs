@@ -18,7 +18,7 @@ public sealed class AdfOrchestratorDispatchResult
     public List<string> ActiveRunIds { get; set; } = new();
 }
 
-public class AdfOrchestratorGateService
+public class AdfOrchestratorGateService : IAdfOrchestratorGateService
 {
     private static readonly HashSet<string> ActiveStatuses = new(StringComparer.OrdinalIgnoreCase)
     {

@@ -20,4 +20,5 @@ public interface IOperationStorageService
     Task<bool> MarkOperationAsFailedAsync(string operationId, string errorMessage);
     Task<(int queued, int running, int completed, int failed, int total)> GetOperationCountsAsync();
     Task<List<OperationStatus>> GetStaleRunningOperationsAsync(TimeSpan staleAfter, CancellationToken cancellationToken = default);
+    Task<int> DeleteExpiredOperationsAsync(int retentionDays, CancellationToken cancellationToken = default);
 }

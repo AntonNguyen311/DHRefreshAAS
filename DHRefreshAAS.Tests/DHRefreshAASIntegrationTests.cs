@@ -1,7 +1,6 @@
 using Xunit;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Moq;
 using System.Net;
@@ -20,11 +19,11 @@ public class DHRefreshAASIntegrationTests
     private readonly Mock<IConfigurationService> _mockConfig;
     private readonly Mock<IConnectionService> _mockConnectionService;
     private readonly Mock<IOperationStorageService> _mockOperationStorage;
-    private readonly Mock<RequestProcessingService> _mockRequestProcessing;
-    private readonly Mock<ResponseService> _mockResponseService;
-    private readonly Mock<ErrorHandlingService> _mockErrorHandling;
-    private readonly Mock<QueueExecutionService> _mockQueueExecution;
-    private readonly Mock<StatusResponseBuilder> _mockStatusResponseBuilder;
+    private readonly Mock<IRequestProcessingService> _mockRequestProcessing;
+    private readonly Mock<IResponseService> _mockResponseService;
+    private readonly Mock<IErrorHandlingService> _mockErrorHandling;
+    private readonly Mock<IQueueExecutionService> _mockQueueExecution;
+    private readonly Mock<IStatusResponseBuilder> _mockStatusResponseBuilder;
     private readonly RefreshController _refreshController;
     private readonly DiagnosticsController _diagnosticsController;
 
@@ -33,22 +32,14 @@ public class DHRefreshAASIntegrationTests
         _mockConfig = new Mock<IConfigurationService>();
         _mockConnectionService = new Mock<IConnectionService>();
         _mockOperationStorage = new Mock<IOperationStorageService>();
-        var mockScalingService = new Mock<AasScalingService>(_mockConfig.Object, Mock.Of<ILogger<AasScalingService>>());
-        var mockElasticPoolScalingService = new Mock<ElasticPoolScalingService>(_mockConfig.Object, Mock.Of<ILogger<ElasticPoolScalingService>>());
-        _mockRequestProcessing = new Mock<RequestProcessingService>(Mock.Of<ILogger<RequestProcessingService>>());
-        _mockResponseService = new Mock<ResponseService>();
-        _mockErrorHandling = new Mock<ErrorHandlingService>(Mock.Of<ILogger<ErrorHandlingService>>());
+        var mockScalingService = new Mock<IAasScalingService>();
+        var mockElasticPoolScalingService = new Mock<IElasticPoolScalingService>();
+        _mockRequestProcessing = new Mock<IRequestProcessingService>();
+        _mockResponseService = new Mock<IResponseService>();
+        _mockErrorHandling = new Mock<IErrorHandlingService>();
 
-        _mockQueueExecution = new Mock<QueueExecutionService>(
-            _mockConfig.Object, Mock.Of<IAasRefreshService>(), _mockOperationStorage.Object,
-            new Mock<ProgressTrackingService>(Mock.Of<ILogger<ProgressTrackingService>>()).Object,
-            new Mock<OperationCleanupService>(_mockOperationStorage.Object, _mockConfig.Object, Mock.Of<ILogger<OperationCleanupService>>()).Object,
-            Mock.Of<IHostApplicationLifetime>(),
-            Mock.Of<ILogger<QueueExecutionService>>());
-        _mockStatusResponseBuilder = new Mock<StatusResponseBuilder>(
-            _mockOperationStorage.Object,
-            new Mock<ProgressTrackingService>(Mock.Of<ILogger<ProgressTrackingService>>()).Object,
-            _mockResponseService.Object);
+        _mockQueueExecution = new Mock<IQueueExecutionService>();
+        _mockStatusResponseBuilder = new Mock<IStatusResponseBuilder>();
 
         _refreshController = new RefreshController(
             _mockConfig.Object,

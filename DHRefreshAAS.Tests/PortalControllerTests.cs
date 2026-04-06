@@ -13,36 +13,26 @@ namespace DHRefreshAAS.Tests;
 
 public class PortalControllerTests
 {
-    private readonly Mock<PortalAuthService> _mockPortalAuth;
-    private readonly Mock<SelfServiceMetadataService> _mockMetadata;
-    private readonly Mock<RequestProcessingService> _mockRequestProcessing;
-    private readonly Mock<QueueExecutionService> _mockQueueExecution;
-    private readonly Mock<StatusResponseBuilder> _mockStatusResponseBuilder;
-    private readonly Mock<ResponseService> _mockResponseService;
-    private readonly Mock<ErrorHandlingService> _mockErrorHandling;
+    private readonly Mock<IPortalAuthService> _mockPortalAuth;
+    private readonly Mock<ISelfServiceMetadataService> _mockMetadata;
+    private readonly Mock<IRequestProcessingService> _mockRequestProcessing;
+    private readonly Mock<IQueueExecutionService> _mockQueueExecution;
+    private readonly Mock<IStatusResponseBuilder> _mockStatusResponseBuilder;
+    private readonly Mock<IResponseService> _mockResponseService;
+    private readonly Mock<IErrorHandlingService> _mockErrorHandling;
     private readonly PortalController _controller;
 
     public PortalControllerTests()
     {
         var mockConfig = new Mock<IConfigurationService>();
-        var mockConnectionService = new Mock<IConnectionService>();
-        var mockOperationStorage = new Mock<IOperationStorageService>();
 
-        _mockPortalAuth = new Mock<PortalAuthService>(mockConfig.Object, Mock.Of<ILogger<PortalAuthService>>());
-        _mockMetadata = new Mock<SelfServiceMetadataService>(mockConfig.Object, mockConnectionService.Object, Mock.Of<ILogger<SelfServiceMetadataService>>());
-        _mockRequestProcessing = new Mock<RequestProcessingService>(Mock.Of<ILogger<RequestProcessingService>>());
-        _mockQueueExecution = new Mock<QueueExecutionService>(
-            mockConfig.Object, Mock.Of<IAasRefreshService>(), mockOperationStorage.Object,
-            new Mock<ProgressTrackingService>(Mock.Of<ILogger<ProgressTrackingService>>()).Object,
-            new Mock<OperationCleanupService>(mockOperationStorage.Object, mockConfig.Object, Mock.Of<ILogger<OperationCleanupService>>()).Object,
-            Mock.Of<Microsoft.Extensions.Hosting.IHostApplicationLifetime>(),
-            Mock.Of<ILogger<QueueExecutionService>>());
-        _mockStatusResponseBuilder = new Mock<StatusResponseBuilder>(
-            mockOperationStorage.Object,
-            new Mock<ProgressTrackingService>(Mock.Of<ILogger<ProgressTrackingService>>()).Object,
-            new ResponseService());
-        _mockResponseService = new Mock<ResponseService>();
-        _mockErrorHandling = new Mock<ErrorHandlingService>(Mock.Of<ILogger<ErrorHandlingService>>());
+        _mockPortalAuth = new Mock<IPortalAuthService>();
+        _mockMetadata = new Mock<ISelfServiceMetadataService>();
+        _mockRequestProcessing = new Mock<IRequestProcessingService>();
+        _mockQueueExecution = new Mock<IQueueExecutionService>();
+        _mockStatusResponseBuilder = new Mock<IStatusResponseBuilder>();
+        _mockResponseService = new Mock<IResponseService>();
+        _mockErrorHandling = new Mock<IErrorHandlingService>();
 
         _controller = new PortalController(
             _mockPortalAuth.Object,

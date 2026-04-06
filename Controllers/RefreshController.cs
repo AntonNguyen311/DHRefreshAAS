@@ -22,27 +22,27 @@ public class RefreshController
 {
     private readonly IConfigurationService _config;
     private readonly IConnectionService _connectionService;
-    private readonly AasScalingService _scalingService;
-    private readonly ElasticPoolScalingService _elasticPoolScalingService;
+    private readonly IAasScalingService _scalingService;
+    private readonly IElasticPoolScalingService _elasticPoolScalingService;
     private readonly IOperationStorageService _operationStorage;
-    private readonly RequestProcessingService _requestProcessing;
-    private readonly ResponseService _responseService;
-    private readonly ErrorHandlingService _errorHandling;
-    private readonly QueueExecutionService _queueExecution;
-    private readonly StatusResponseBuilder _statusResponseBuilder;
+    private readonly IRequestProcessingService _requestProcessing;
+    private readonly IResponseService _responseService;
+    private readonly IErrorHandlingService _errorHandling;
+    private readonly IQueueExecutionService _queueExecution;
+    private readonly IStatusResponseBuilder _statusResponseBuilder;
     private readonly ILogger<RefreshController> _logger;
 
     public RefreshController(
         IConfigurationService config,
         IConnectionService connectionService,
-        AasScalingService scalingService,
-        ElasticPoolScalingService elasticPoolScalingService,
+        IAasScalingService scalingService,
+        IElasticPoolScalingService elasticPoolScalingService,
         IOperationStorageService operationStorage,
-        RequestProcessingService requestProcessing,
-        ResponseService responseService,
-        ErrorHandlingService errorHandling,
-        QueueExecutionService queueExecution,
-        StatusResponseBuilder statusResponseBuilder,
+        IRequestProcessingService requestProcessing,
+        IResponseService responseService,
+        IErrorHandlingService errorHandling,
+        IQueueExecutionService queueExecution,
+        IStatusResponseBuilder statusResponseBuilder,
         ILogger<RefreshController> logger)
     {
         _config = config;
